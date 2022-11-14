@@ -9,7 +9,47 @@ sys.path.append(r"C:\Users\ort\OneDrive - Statistisk sentralbyrå\Dokumenter\Git
 import networkz as nz
 from networkz.stottefunksjoner import *
 
-# %%
+#%%
+
+fallvilt = pd.read_excel(r"C:\Users\ort\OneDrive - Statistisk sentralbyrå\Dokumenter\fallvilt.xlsx")
+print(len(fallvilt))
+print(fallvilt.Årsak.value_counts())
+
+#velg ut kun påkjorsler, kun hjort, elg og raadyr og kun dodsfall
+fallvilt2 = fallvilt.query('Årsak=="Påkjørt av motorkjøretøy" | Årsak=="Påkjørt av tog"')
+
+#%%
+fallvilt2['Dato']
+#%%
+fallvilt2['maaned'] = fallvilt2['Dato'].astype(str).map(lambda x: x.split("-")[1]).astype(int)
+fallvilt2['aar'] = fallvilt2['Dato'].astype(str).map(lambda x: x.split("-")[0]).astype(int)
+print(fallvilt2.maaned.value_counts())
+print(fallvilt2.aar.value_counts())
+#%%
+import warnings
+
+#from pandas.core.common import SettingWithCopyWarning
+warnings.simplefilter(action="ignore")
+
+outt=[]
+for jaktsesong_fra in [2017, 2018, 2019, 2020, 2021, 2022]:
+
+    jaktsesong_til = jaktsesong_fra + 1
+
+    #lag kolonne for jaktsesong (sesongen 2020-2021 er fra 01.04.2020 til 31.03.2021)
+    jaktsesong = str(jaktsesong_fra)+"-"+str(jaktsesong_til)
+    print(jaktsesong)
+    fallvilt2["Jaktsesong"] = np.nan
+    fallvilt2["Jaktsesong"] = np.where((fallvilt2["aar"]==jaktsesong_fra) & (fallvilt2["maaned"]>=4) | (fallvilt2["aar"]==jaktsesong_til) & (fallvilt2["maaned"]<4), 
+                                       jaktsesong, 
+                                       "Ikke relevant jaktsesong")
+    print(fallvilt2[fallvilt2["Jaktsesong"] == jaktsesong].Art.value_counts())
+    #out["Jaktsesong"] = jaktsesong
+    #outt.append(out)
+
+
+
+#%%
 resultater = []
 for aar in [2021, 2022]:
     
@@ -24,8 +64,8 @@ for aar in [2021, 2022]:
     nettverk = nz.lag_nettverk(veger, turn_restrictions = None)
     
     G = nz.graf(nettverk, weight = "minutter")
-
-    for n in [1000]:#, 1000]:#, 10000]:
+    
+    for n in [100]:#, 1000]:#, 10000]:
         
         punkter = gpd.read_parquet(f"C:/Users/ort/OneDrive - Statistisk sentralbyrå/data/tilfeldige_adresser_{n}.parquet")
         
@@ -45,8 +85,8 @@ for aar in [2021, 2022]:
             tid = time.perf_counter()
             
             od = nz.od_cost_matrix(G, punkter, punkter, 
-                             #      id_kolonne="idx",
-                                forsok = 30, search_tolerance=None,
+                                id_kolonne="idx",
+                                forsok = 30, search_tolerance=10000,
                                 bufferdist_prosent = bufferdist_prosent,
                                 returner_linjer=False)
 
@@ -66,10 +106,13 @@ resultater = pd.concat(resultater, axis=0, ignore_index=True)
 resultater.to_csv("C:/Users/ort/OneDrive - Statistisk sentralbyrå/data/resultater_adresser.csv", sep=";", index=False)
 resultater
 # %%
+
+# %%
+
 aar = 2021
 n = 1000
-bufferdist = 20
-# %%
+bufferdist_prosent = 20
+
 if aar==2021:
     veger = gpd.read_parquet(r"C:\Users\ort\OneDrive - Statistisk sentralbyrå\data\veger_oslo_2021.parquet")
 #    veger = nz.les_fil(r"C:\data\vegnett2021.gdb\ERFKPS")
@@ -82,13 +125,23 @@ G = nz.graf(nettverk, weight = "minutter")
     
 punkter = gpd.read_parquet(f"C:/Users/ort/OneDrive - Statistisk sentralbyrå/data/tilfeldige_adresser_{n}.parquet")
 
+hovedoya = nz.til_gdf("POINT (261319.30000000013 6647824.800000001)", 
+                        crs=punkter.crs)
+hovedoya["geometry"] = hovedoya.buffer(10)
+hovedoya["hovedoya"] = 1
+punkter = punkter.sjoin(hovedoya, how="left")
+punkter = punkter[punkter.hovedoya != 1]
+
 tid = time.perf_counter()
 
-od = nz.od_cost_matrix(G, punkter, punkter, 
+od = nz.od_cost_matrix(G,
+                       punkter, 
+                       punkter,
                        id_kolonne="idx",
-                    forsok = 10, search_tolerance=None,
-                    bufferdist_prosent = bufferdist_prosent,
-                    returner_linjer=False)
+                       forsok = 5, 
+                       search_tolerance=None,
+                       bufferdist_prosent = bufferdist_prosent,
+                       returner_linjer=True)
 
 df = pd.DataFrame({
     "aar": aar,
@@ -99,23 +152,35 @@ df = pd.DataFrame({
     "mangler_prosent": len(od[od.kostnad.isna()]) / len(od)*100 
                     }, index=[0])
 
-df       
+df
+#%%
+
 #%%
 def problempunkter(od):
-    od["fra_mangler"] = od.fra.map(od[od.kostnad.isna()].fra.value_counts())
-    problempunkter = od[(od.fra_mangler>np.mean(od.fra_mangler))].drop_duplicates("fra")
-    problempunkter["idx"] = problempunkter["fra"]
     
-    od["til_mangler"] = od.til.map(od[od.kostnad.isna()].til.value_counts())
-    problempunkter2 = od[(od.til_mangler>np.mean(od.til_mangler))].drop_duplicates("til")
-    problempunkter2["idx"] = problempunkter2["til"]
+    print(od.forsok.value_counts(), "\n")
+    print(od.kostnad.describe(), "\n")
     
-    problempunkter = pd.concat([problempunkter, problempunkter2],axis=0, ignore_index=True)
-    return problempunkter[["idx"]].drop_duplicates("idx")
-    
-problempunkter(od)
+    if len(od[od.kostnad.isna()])==0:
+        print("Ingen ruter mangler")
+    else:
+        od["fra_mangler"] = od.fra.map(od[od.kostnad.isna()].fra.value_counts())
+        problempunkter = od[(od.fra_mangler>np.mean(od.fra_mangler))].drop_duplicates("fra")
+        problempunkter["idx"] = problempunkter["fra"]
+        
+        od["til_mangler"] = od.til.map(od[od.kostnad.isna()].til.value_counts())
+        problempunkter2 = od[(od.til_mangler>np.mean(od.til_mangler))].drop_duplicates("til")
+        problempunkter2["idx"] = problempunkter2["til"]
+        
+        problempunkter = pd.concat([problempunkter, problempunkter2],axis=0, ignore_index=True)
+        
+        return problempunkter.drop_duplicates("idx")
+         
+prob = problempunkter(od)
 
-
+prob
+#til_gdf(prob.idx.iloc[0], crs=25833).explore()
+#til_gdf(prob.idx).explore()
 
 # %%
 od["fra_mangler"] = od.fra.map(od[od.kostnad.isna()].fra.value_counts())
