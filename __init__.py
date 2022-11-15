@@ -19,7 +19,7 @@ del _hard_dependencies, _dependency, _missing_dependencies
 
 from networkz.graf import Graf
 
-from networkz.nettverk import lag_nettverk, hent_nettverk, lag_noder, network_from_geometry
+from networkz.nettverk import lag_nettverk, network_from_geometry
 
 from networkz.service_area import service_area
 
