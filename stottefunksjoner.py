@@ -157,72 +157,35 @@ def map_ids(df, id_kolonner, startpunkter, sluttpunkter=None):
     return df
 
 
-def bestem_kostnad(self, kostnad):
-    
-    if isinstance(kostnad, str):
-        if "min" in kostnad:
-            kostnader = "minutter"
-        elif "dist" in kostnad or "meter" in kostnad:
-            kostnader = "meter"
-        else:
-            raise ValueError("weight må inneholder 'min', 'dist' eller 'meter'")
-    
-    elif isinstance(kostnad, list) or isinstance(kostnad, tuple):
-        kostnader = []
-        for kost in kostnad:
-            if "min" in kost:
-                kostnader.append("minutter")
-            elif "dist" in kost or "meter" in kost:
-                kostnader.append("meter")
-            else:
-                raise ValueError("weight må inneholder 'min', 'dist' eller 'meter'")
-            
-    if kostnad=="minutter" or kostnad[0]=="minutter":
-        try:
-            if "bil" in self.kjoretoy or "car" in self.kjoretoy or "auto" in self.kjoretoy:
-                self._kjoretoy = "bil"
-                self._nettverk["minutter"] = self._nettverk.minutter_bil
-            elif "sykkel" in self.kjoretoy or "bike" in self.kjoretoy or "bicyc" in self.kjoretoy:
-                self._kjoretoy = "sykkel"
-                self._nettverk["minutter"] = self._nettverk.length / (self.fart_sykkel * 16.6666666)
-            elif "fot" in self.kjoretoy or "foot" in self.kjoretoy:
-                self._kjoretoy = "fot"
-                self._nettverk["minutter"] = self._nettverk.length / (self.fart_fot * 16.6666666)
-            else:
-                raise ValueError("kjoretoy må være bil, sykkel eller fot")
-        except AttributeError:
-            raise AttributeError("Finner ikke minuttkolonne.")
-        
-    return kostnader
-
-
 #kutter linjer x meter fra startpunktet.
 #må gjentas hvis man har linjer som er mer enn dobbelt så lange som spesifisert lengde
 def kutt_linjer(gdf, lengde):
     from shapely.geometry import Point, LineString
+    from shapely.ops import unary_union
+    
     #cut med shapely av sgilles
     def cut(line, distance):
         # Cuts a line in two at a distance from its starting point
         if distance <= 0.0 or distance >= line.length:
-            return [LineString(line)]
+            return LineString(line)
         coords = list(line.coords)
         for i, p in enumerate(coords):
             pd = line.project(Point(p))
             if pd == distance:
-                return [
+                return unary_union([
                     LineString(coords[:i+1]),
-                    LineString(coords[i:])]
+                    LineString(coords[i:])])
             if pd > distance:
                 cp = line.interpolate(distance)
-                return [
+                return unary_union([
                     LineString(coords[:i] + [(cp.x, cp.y)]),
-                    LineString([(cp.x, cp.y)] + coords[i:])]
+                    LineString([(cp.x, cp.y)] + coords[i:])])
             
     #singlepart, kutt for hver rad, singlepart
-    singlepart = gpd.GeoDataFrame(gdf, geometry="geometry", crs=gdf.crs).explode(ignore_index=True).copy(deep=True)
+    singlepart = gpd.GeoDataFrame(gdf, geometry="geometry", crs=gdf.crs).explode(ignore_index=True)
     singlepart["geometry"] = singlepart.geometry.apply(lambda x: cut(x, lengde))
+    singlepart = gpd.GeoDataFrame(singlepart, geometry="geometry", crs=gdf.crs)
     singlepart = singlepart.explode(ignore_index=True)
     singlepart = gpd.GeoDataFrame(singlepart, geometry="geometry", crs=gdf.crs)
     singlepart = singlepart[singlepart.length>0.01]
     return singlepart
-
