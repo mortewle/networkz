@@ -126,7 +126,7 @@ def avstand_til_noder(punkter, G, hva):
     
     # avstand fra punktene til 100 nærmeste noder
     # de langt unna vil ikke være attraktive pga lav hastighet fram til nodene 
-    nbr = NearestNeighbors(n_neighbors=100, algorithm='ball_tree').fit(noder_array)
+    nbr = NearestNeighbors(n_neighbors=G.naboer, algorithm='ball_tree').fit(noder_array)
     avstander, idxs = nbr.kneighbors(punkter_array)
     
     punkter["dist_node"] = np.min(avstander, axis=1)
