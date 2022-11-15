@@ -2,7 +2,7 @@ import numpy as np
 import pandas as pd
 import geopandas as gpd
 import pygeos
-from networkz.stottefunksjoner import fjern_tomme_geometrier, gdf_concat, les_geoparquet
+from networkz.stottefunksjoner import fjern_tomme_geometrier, gdf_concat, les_geoparquet, kutt_linjer
 
 
 def network_from_geometry(veger, 
@@ -53,6 +53,10 @@ def network_from_geometry(veger,
 # nye node-id-er som følger index (fordi jeg indexer med numpy arrays i avstand_til_noder())
 def make_node_ids(veger_kopi):
 
+#    while np.max(veger_kopi.length)>50:
+ #       veger_kopi = kutt_linjer(veger_kopi, 50)
+  #      print(np.max(veger_kopi.length))
+    
     sources = veger_kopi[["source_wkt"]].rename(columns={"source_wkt":"wkt"})  
     targets = veger_kopi[["target_wkt"]].rename(columns={"target_wkt":"wkt"})
     noder = (pd.concat([sources, targets], axis=0, ignore_index=True)
@@ -92,6 +96,7 @@ def lag_nettverk(veger,
                  source: str = "fromnodeid",
                  target: str = "tonodeid",
                  linkid: str = "linkid",
+                 sperring = False,
                  turn_restrictions = None):
     
     veger_kopi = veger.copy()
@@ -158,7 +163,12 @@ def lag_nettverk(veger,
         veger_kopi["KOMMUNENR"] = veger_kopi[komm_col].map(lambda x: str(int(x)).zfill(4)).astype("category")
     else:
         veger_kopi["KOMMUNENR"] = 0
-            
+    
+    if sperring:
+        if "sperring" in veger_kopi.columns:
+            veger_kopi = veger_kopi[veger_kopi.sperring != 1] 
+    
+    
     # litt opprydning (til utm33-koordinater, endre navn på kolonner, beholde kun relevante kolonner, resette index)
     veger_kopi = (veger_kopi
                     .to_crs(25833)
@@ -166,17 +176,43 @@ def lag_nettverk(veger,
                     [["idx", "source", "target", "linkid", drivetime_fw, drivetime_bw, "oneway", "KOMMUNENR", "geometry"]]
                     .reset_index(drop=True) 
                     )
-        
+    
     # fra multilinestring til linestring. Og fjerne z-koordinat fordi de ikke trengs
     veger_kopi = fjern_tomme_geometrier(veger_kopi)
     veger_kopi["geometry"] = pygeos.line_merge(pygeos.force_2d(pygeos.from_shapely(veger_kopi.geometry)))   
-    
+      
     #hvis noen lenker fortsatt er multilinestrings, må de splittes for å ikke ha flere enn to ytterpunkter 
     n = len(veger_kopi)
     veger_kopi = veger_kopi.explode(ignore_index=True)
     if len(veger_kopi)<n:
         print(f"Advarsel: {len(veger_kopi)-n} multigeometrier ble splittet. Minutt-kostnader blir feil for disse.")
         #TODO: lag ny minutt-kolonne manuelt
+    
+    # fjern små veger som er kutta av fra resten av vegnettet.
+    # gjerne privatveger bak bom.
+    print(len(veger_kopi))
+    import time
+    print(time.perf_counter())
+    import dask_geopandas as dg
+    dask_gdf = dg.from_geopandas(veger_kopi[["geometry"]], npartitions=8)
+    dask_gdf["geometry"] = dask_gdf.buffer(0.001, resolution = 1).compute() # lavest mulig resolution for å få det fort
+    dissolvet = dask_gdf.dissolve().compute()
+    singlepart = dissolvet.explode(ignore_index=True)
+    store_nettverksdeler = singlepart[singlepart.area>5]
+    veger_kopi = veger_kopi.sjoin(store_nettverksdeler, how="inner")
+    print(len(veger_kopi))
+    print(time.perf_counter())
+    print(sum(veger_kopi.area))
+    
+    if sperring:
+        while np.max(veger_kopi.length) > 1001:
+            veger_kopi = kutt_linjer(veger_kopi, 1000)
+        while np.max(veger_kopi.length) > 301:
+            veger_kopi = kutt_linjer(veger_kopi, 300)
+        while np.max(veger_kopi.length) > 101:
+            veger_kopi = kutt_linjer(veger_kopi, 100)
+        while np.max(veger_kopi.length) > 51:
+            veger_kopi = kutt_linjer(veger_kopi, 50)
     
     # hent ut linjenes ytterpunkter. 
     # men først: sirkler har ingen ytterpunkter og heller ingen funksjon. Disse må fjernes
@@ -206,18 +242,7 @@ def lag_nettverk(veger,
     ft["minutter_bil"] = ft[drivetime_fw]
     tf["minutter_bil"] = tf[drivetime_bw]
 
-    #TODO: hva er oneway=='N'? Antar at det er toveiskjørt.
-    n = veger_kopi[(veger_kopi.oneway=="N") | (veger_kopi.oneway=="") | (veger_kopi.oneway.isna())]
-    if len(n)>0:
-        n2 = n.copy()
-        n2 = n2.rename(columns={"source": "target", "target": "source", "source_wkt": "target_wkt", "target_wkt": "source_wkt"})
-        n["minutter_bil"] = n[drivetime_fw]
-        n2["minutter_bil"] = n2[drivetime_bw]
-        n = n[~((n.minutter_bil.isna()) | (n.minutter_bil==""))]
-        n2 = n2[~((n2.minutter_bil.isna()) | (n2.minutter_bil==""))]
-        veger_edges = gdf_concat([begge_retninger1, begge_retninger2, ft, tf, n, n2])
-    else:
-        veger_edges = gdf_concat([begge_retninger1, begge_retninger2, ft, tf])
+    veger_edges = gdf_concat([begge_retninger1, begge_retninger2, ft, tf])
 
     # lag meter-kolonne
     veger_edges["meter"] = veger_edges.length
@@ -295,57 +320,6 @@ def turn_restr(veger_edges, turn_restrictions):
         veger_edges.loc[(veger_edges["linkid"].isin(turn_restrictions["fromlinkid"])), "turn_restriction"] = False
 
     return gdf_concat([veger_edges, dobbellenker])
-    
-    
+       
 
-def hent_nettverk(nettverk, aar, NYESTE_AAR):
-    
-    if isinstance(nettverk, gpd.GeoDataFrame):
-        return nettverk.to_crs(25833), None
-    
-    if nettverk is None:
-        if aar is None:
-            raise ValueError("Både 'aar' og 'nettverk' kan ikke være None")
-        
-    if isinstance(nettverk, str):
-        if aar is not None:
-            nettverk = nettverk.replace(str(NYESTE_AAR), str(aar))
-        try:
-            if "parquet" in nettverk:
-                return les_geoparquet(nettverk).to_crs(25833), nettverk
-            return gpd.read_file(nettverk).to_crs(25833), nettverk
-        except Exception:
-            raise ValueError(f"Finner ikke {nettverk}")
-    else:
-        raise ValueError("'nettverk' må enten være filsti, None eller GeoDataFrame")
-    
-    
-def lag_noder(nettverk):
-    
-    sources = (nettverk
-               [["source", "source_wkt"]]
-               .drop_duplicates(subset=["source"])
-               .rename(columns={"source": "node_id", "source_wkt": "wkt"})
-               .reset_index(drop=True)
-    )
-    
-    targets = (nettverk
-               [["target", "target_wkt"]]
-               .loc[~nettverk.target.isin(sources.node_id)]
-               .drop_duplicates(subset=["target"])
-               .rename(columns={"target": "node_id", "target_wkt": "wkt"})
-               .reset_index(drop=True)
-    )
-    
-    noder = pd.concat([sources, 
-                       targets], axis=0, ignore_index=True)
-    noder["geometry"] = gpd.GeoSeries.from_wkt(noder.wkt, crs=25833)
-    noder = gpd.GeoDataFrame(noder, geometry="geometry", crs=25833)
-    
-    noder.node_id = noder.node_id.astype(int)
-    noder = noder.sort_values("node_id").reset_index(drop=True)
-    noder.node_id = noder.node_id.astype(str)
-    
-    return noder.drop("wkt", axis=1).drop_duplicates(subset=["node_id"])
-    
     
