@@ -179,6 +179,8 @@ class Graf:
                         cutoff: int = None,
                         destination_count: int = None,
                         ):
+        
+        self.finn_feil()
                  
         return od_cost_matrix(self, startpunkter, sluttpunkter, id_kolonne, returner_linjer, radvis, cutoff, destination_count)
 
@@ -189,6 +191,8 @@ class Graf:
                      id_kolonne = None
                      ):
         
+        self.finn_feil()
+
         if not isinstance(self.kostnad, str):
             raise ValueError("Kan bare ha én kostnad i service_area")
         
@@ -202,6 +206,8 @@ class Graf:
                         cutoff: int = None,
                         destination_count: int = None,
                         ):
+
+        self.finn_feil()
         
         if not isinstance(self.kostnad, str):
             raise ValueError("Kan bare ha én kostnad i shortest_path")
@@ -224,6 +230,7 @@ class Graf:
         return kommuner
 
 
+    # TODO: forenkle dette
     def hent_nettverk(self, nettverk, aar, NYESTE_AAR):
         
         if isinstance(nettverk, gpd.GeoDataFrame):
@@ -246,6 +253,7 @@ class Graf:
             raise ValueError("'nettverk' må enten være filsti, None eller GeoDataFrame")
 
 
+    # TODO: forenkle dette
     def bestem_kostnad(self, kostnad):
         
         if isinstance(kostnad, str):
@@ -298,7 +306,7 @@ class Graf:
             
         return kostnader
  
- 
+    
     def lag_noder(self):
         
         sources = (self._nettverk
@@ -334,12 +342,14 @@ class Graf:
         if self._sperring is not None:
             
             for kat in [kat for kat in self._sperring]:
-                self.nettverk = self.nettverk[~((self.nettverk["sperring"].astype(int) == 1) & (self.nettverk["category"]==kat))]
+                self.nettverk = self.nettverk[~((self.nettverk["sperring"].fillna(0).astype(int) == 1) & (self.nettverk["category"]==kat))]
                 #self.nettverk = self.nettverk[~((self.nettverk["lite_nettverk"].astype(int) == 1) & (self.nettverk["category"]==kat))]
             
         return self.nettverk
         
-        
+    def finn_feil(self):
+        if len(self._nettverk)==0:
+            raise ValueError("Nettverket har 0 rader")        
         
 """  
 class Nettverk:
