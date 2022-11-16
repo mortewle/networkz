@@ -4,6 +4,7 @@ from networkz.od_cost_matrix import od_cost_matrix
 from networkz.service_area import service_area
 from networkz.shortest_path import shortest_path
 from networkz.nettverk import make_node_ids
+from networkz.stottefunksjoner import les_geoparquet
 
 
 # årene det ligger tilrettelagte vegnettverk på Dapla
@@ -31,6 +32,7 @@ class Graf:
                  kostnad="minutter", 
                  directed=True, 
                  turn_restrictions=False, #midlr false
+                 sperring = "ERFKPS", # hvilke vegkategorier hvor vegbommer skal være til hinder. Så hvis sperring=='ERFK_S', er det lov å kjøre gjennom private bommer. Hvis sperring er None, er alle bommer lov.
                  
                  # regler for hvordan man vil koble punkter til noder. Om man vil ha mest mulig fullstendige eller mest mulig riktige resultater.
                  search_tolerance = 5000, 
@@ -62,17 +64,21 @@ class Graf:
         self.fart_fot = fart_fot
         
         self._kostnad = self.bestem_kostnad(kostnad)
-           
+        
         self.directed = directed
         
-        self.turn_restrictions = turn_restrictions
+        self._turn_restrictions = turn_restrictions
+        
+        self._sperring = sperring
         
         self.search_tolerance = search_tolerance if search_tolerance is not None else 100000000
         
         self.dist_konstant = dist_konstant
         
         self.kost_til_nodene = kost_til_nodene
-    
+        
+        self._nettverk = self.filtrer_nettverket() 
+
 
     # for å printe relevante attributter når man skriver navnet på class-objektet
     def __repr__(self):
@@ -143,8 +149,27 @@ class Graf:
     @property
     def kommuner(self):
         return self._kommuner        
-     
+    @property
+    def sperring(self):
+        return self._sperring
+    @property
+    def turn_restrictions(self):
+        return self._turn_restrictions
+                 
     
+    def filtrer_nettverket(self):
+        
+        if self.directed and self.turn_restrictions:
+            self.nettverk = self.nettverk[self.nettverk["turn_restriction"] != False]
+        else:
+            self.nettverk = self.nettverk[self.nettverk["turn_restriction"] != True]
+
+        if self._sperring is not None:
+            self.nettverk = self.type_sperring()
+
+        return self.nettverk
+            
+            
     def od_cost_matrix(self, 
                         startpunkter: gpd.GeoDataFrame, 
                         sluttpunkter: gpd.GeoDataFrame,
@@ -154,7 +179,7 @@ class Graf:
                         cutoff: int = None,
                         destination_count: int = None,
                         ):
-        
+                 
         return od_cost_matrix(self, startpunkter, sluttpunkter, id_kolonne, returner_linjer, radvis, cutoff, destination_count)
 
 
@@ -195,6 +220,8 @@ class Graf:
                 self._nettverk = self._nettverk[self._nettverk.KOMMUNENR.isin(list(kommuner))]
             if len(self._nettverk)==0:
                 raise ValueError("Ingen rader matcher med kommunenumrene dine.")
+        
+        return kommuner
 
 
     def hent_nettverk(self, nettverk, aar, NYESTE_AAR):
@@ -234,14 +261,17 @@ class Graf:
         
         # hjelp til med å finne kostnadskolonnen     
         if len(kostnader) != len(kostnad):
-            if "minutter" in self._nettverk:
-                kostnader.append("minutter")
-            elif "minutes" in self._nettverk:
-                kostnader.append("minutes")
-            elif "dist" in kostnad or "meter" in kostnad:
-                kostnader.append("meter")
-            else:
-                raise ValueError("Finner ikke kostnadskolonne")
+            for col in self._nettverk.columns:
+                if "minutter" in col:
+                    kostnader.append("minutter")
+                elif "minutes" in col:
+                    kostnader.append("minutes")
+                elif "dist" in kostnad or "meter" in kostnad:
+                    self._nettverk["meter"] = self._nettverk.length
+                    kostnader.append("meter")
+
+        if len(kostnader) == 0:
+            raise ValueError("Finner ikke kostnadskolonne")
 
         if len(kostnader) > len(kostnad):
             raise ValueError(f"Flere enn {len(kostnad)} kolonner kan inneholde kostnaden{'e' if len(kostnad)>1 else ''} {', '.join(kostnad)}")
@@ -298,7 +328,20 @@ class Graf:
         
         return noder.drop("wkt", axis=1).drop_duplicates(subset=["node_id"])
        
+    
+    def type_sperring(self):
         
+        if self._sperring is not None:
+            
+            for kat in [kat for kat in self._sperring]:
+                self.nettverk = self.nettverk[~((self.nettverk["sperring"].astype(int) == 1) & (self.nettverk["category"]==kat))]
+                #self.nettverk = self.nettverk[~((self.nettverk["lite_nettverk"].astype(int) == 1) & (self.nettverk["category"]==kat))]
+            
+        return self.nettverk
+        
+        
+        
+"""  
 class Nettverk:
     def __init__(self,
                 aar = NYESTE_AAR,
@@ -472,7 +515,7 @@ class Graf:
         
         return shortest_path(self,startpunkter, sluttpunkter, id_kolonne, cutoff, destination_count)
 
-
+"""
     
 """
 
