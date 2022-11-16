@@ -96,7 +96,7 @@ def lag_nettverk(veger,
                  source: str = "fromnodeid",
                  target: str = "tonodeid",
                  linkid: str = "linkid",
-                 finn_smaa_nettverk = False,
+                 smaa_nettverk = True,
                  sperring = None,
                  turn_restrictions = None):
     
@@ -211,7 +211,7 @@ def lag_nettverk(veger,
     
     # fjern små veger som er kutta av fra resten av vegnettet.
     # gjerne privatveger bak bom.
-    if finn_smaa_nettverk:
+    if smaa_nettverk:
         veger_kopi = finn_smaa_nettverk(veger_kopi, storrelse=5)
     else:
         veger_kopi["lite_nettverk"] = np.nan
@@ -281,7 +281,7 @@ def lag_nettverk(veger,
     veger_edges = make_node_ids(veger_edges)
 
     # category-type for å spare plass
-    for col in ["source", "target", "source_wkt", "target_wkt", "turn_restriction", "category", "KOMMUNENR", "sperring"]:
+    for col in ["source", "target", "source_wkt", "target_wkt", "turn_restriction", "category", "KOMMUNENR"]:
         veger_edges[col] = veger_edges[col].astype(str).astype("category")
             
     return veger_edges
@@ -290,7 +290,7 @@ def lag_nettverk(veger,
 # looping er treigt, men buffer+dissolve for store områder er mye treigere. 
 # "deler" derfor dataene i ruter ved å gi kolonner koordinat-kategorier
 def koor_kat(gdf, 
-             meter = 1000, # minst mulig ruter er ikke alltid raskest. Varierer med hvor tunge dataene er.
+             meter = 2000, # minst mulig ruter er ikke alltid raskest. Varierer med hvor tunge dataene er.
              x2 = False # x2=True gir en kolonne til med ruter 1/2 hakk nedover og bortover. Hvis grensetilfeller er viktig
              ):
     
@@ -323,7 +323,7 @@ def koor_kat(gdf,
 
 def finn_smaa_nettverk(veger, storrelse=5):
     
-    veger = koor_kat(veger, meter = 2000, x2 = True)
+    veger = koor_kat(veger, meter = 1500, x2 = True)
 
     if "sperring" in veger.columns:
         veger2 = veger[veger.sperring.astype(int) != 1]
@@ -366,27 +366,38 @@ def finn_smaa_nettverk(veger, storrelse=5):
     return veger
     
 
-def turn_restr(veger_edges, turn_restrictions):
+def turn_restr(veger, turn_restrictions):
     
+    veger_edges = veger.copy()
+    
+    # FID starter på  1
+    veger_edges["idx"] = veger_edges["idx"] + 1
+
     turn_restrictions.columns = [col.lower() for col in turn_restrictions.columns]
 
+    for col in turn_restrictions.columns:
+        turn_restrictions[col] = turn_restrictions[col].astype(str)
+                
     # hvis 2021-data
     if "edge1fid" in turn_restrictions.columns:
-        turn_restrictions1 = turn_restrictions.loc[turn_restrictions.edge1end=="Y", ["edge1fid", "edge2fid"]]
-        turn_restrictions2 = turn_restrictions.loc[turn_restrictions.edge1end=="N", ["edge1fid", "edge2fid"]].rename(columns={"edge1fid":"edge2fid", "edge2fid":"edge1fid"})
+        veger_edges["idx"] = veger_edges["idx"].astype(str)
+        turn_restrictions1 = turn_restrictions.loc[turn_restrictions.edge1end=="Y", ["edge1fid", "edge2fid"]].rename(columns={"edge1fid":"edge2fid", "edge2fid":"edge1fid"})
+        turn_restrictions2 = turn_restrictions.loc[turn_restrictions.edge1end=="N", ["edge1fid", "edge2fid"]]
         turn_restrictions = pd.concat([turn_restrictions1, turn_restrictions2], axis=0, ignore_index=True)
         lenker_med_restriction = veger_edges.merge(turn_restrictions, left_on = "idx", right_on = "edge1fid", how = "inner")
-#            lenker_med_restriction = veger_edges[veger_edges.idx.isin(turn_restrictions.edge1fid)]
+        
     # hvis 2022
     else:    
+        veger_edges["linkid"] = veger_edges["linkid"].astype(str)
         lenker_med_restriction = veger_edges.merge(turn_restrictions, left_on = "linkid", right_on = "fromlinkid", how = "inner")
 #      lenker_med_restriction = veger_edges.merge(turn_restrictions, left_on = ["source", "target"], right_on = ["fromfromnode", "fromtonode"], how = "inner")
     #    lenker_med_restriction2 = veger_edges.merge(turn_restrictions, left_on = ["source", "target", "linkid"], right_on = ["fromfromnode", "fromtonode", "fromlinkid"], how = "inner")
         
     # gjør lenkene med restrictions til første del av nye dobbellenker som skal lages
     lenker_med_restriction = (lenker_med_restriction
-            .rename(columns={"target": "middlenode", "minutter_bil": "minutter1", "meter": "meter1", "geometry": "geom1", "idx": "edge1fid"}) 
-            .loc[:, ["source", "source_wkt", "middlenode", "minutter1", "meter1", "geom1", "edge1fid"]] )
+                              .drop("edge1fid", axis=1, errors="ignore")
+                              .rename(columns={"target": "middlenode", "minutter_bil": "minutter1", "meter": "meter1", "geometry": "geom1", "idx": "edge1fid"}) 
+                              .loc[:, ["source", "source_wkt", "middlenode", "minutter1", "meter1", "geom1", "edge1fid"]] )
     # klargjør tabell som skal bli andre del av dobbellenkene
     restrictions = (veger_edges
             .copy()
@@ -394,31 +405,35 @@ def turn_restr(veger_edges, turn_restrictions):
             .loc[:, ["middlenode","target", "target_wkt", "minutter2", "meter2", "geom2", "edge2fid"]] )
 
     # koble basert på den nye kolonnen 'middlenode', som blir midterste node i dobbellenkene
-    fra_noder_med_restriction = lenker_med_restriction.merge(restrictions, on = "middlenode", how = "inner")
-
+    fra_noder_med_restriction = lenker_med_restriction.merge(restrictions, 
+                                                             on = "middlenode", 
+                                                             how = "inner")
+    
     # vi har nå alle dobbellenker som starter der et svingforbud starter. 
-    # velg nå ut kun dobbellenkene det faktisk er svingforbud ()
+    # fjern nå dobbellenkene det faktisk er svingforbud
     if "edge1fid" in turn_restrictions.columns:
-        dobbellenker = fra_noder_med_restriction[~((fra_noder_med_restriction["edge1fid"].isin(turn_restrictions["edge1fid"])) & 
+        dobbellenker = fra_noder_med_restriction[
+                            ~((fra_noder_med_restriction["edge1fid"].isin(turn_restrictions["edge1fid"])) & 
                                 (fra_noder_med_restriction["edge2fid"].isin(turn_restrictions["edge2fid"])))]
     else:
-        dobbellenker = fra_noder_med_restriction[~((fra_noder_med_restriction["source"].isin(turn_restrictions["fromfromnode"])) & 
+        dobbellenker = fra_noder_med_restriction[
+                            ~((fra_noder_med_restriction["source"].isin(turn_restrictions["fromfromnode"])) & 
 #                                   (fra_noder_med_restriction["middlenode"].isin(turn_restrictions["fromtonode"])) &
                                 (fra_noder_med_restriction["target"].isin(turn_restrictions["totonode"])))]
-
+    
     # smelt lenkeparene sammen
     dobbellenker["minutter_bil"] = dobbellenker["minutter1"] + dobbellenker["minutter2"]
     dobbellenker["meter"] = dobbellenker["meter1"] + dobbellenker["meter2"]
     dobbellenker["geometry"] = pygeos.line_merge(pygeos.union(pygeos.from_shapely(dobbellenker.geom1), pygeos.from_shapely(dobbellenker.geom2)))
     dobbellenker = gpd.GeoDataFrame(dobbellenker, geometry = "geometry", crs = 25833)
     dobbellenker["turn_restriction"] = True
-
+    
     if "edge1fid" in turn_restrictions.columns:
         veger_edges.loc[(veger_edges["idx"].isin(turn_restrictions["edge1fid"])), "turn_restriction"] = False
     else:
         veger_edges.loc[(veger_edges["linkid"].isin(turn_restrictions["fromlinkid"])), "turn_restriction"] = False
 
     return gdf_concat([veger_edges, dobbellenker])
-       
+ 
 
     
