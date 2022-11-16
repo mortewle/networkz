@@ -16,12 +16,6 @@ def lag_graf(G,
     nettverk = G.nettverk.copy()
     noder = G.noder
                                     
-    # fjern enten lenker med svingforbud eller lenker som hindrer svinger hvis man ikke vil ha turn_restrictions på
-    if G.directed and G.turn_restrictions:
-        nettverk = nettverk[nettverk["turn_restriction"] != False]
-    else:
-        nettverk# = nettverk[nettverk["turn_restriction"] != True] midlr. fordi turn_restrictions ikke funker
-    
     startpunkter["nz_idx"] = range(len(startpunkter))
     startpunkter["nz_idx"] = startpunkter["nz_idx"] + np.max(noder.node_id.astype(int)) + 1
     startpunkter["nz_idx"] = startpunkter["nz_idx"].astype(str)
