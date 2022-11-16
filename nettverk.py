@@ -96,7 +96,8 @@ def lag_nettverk(veger,
                  source: str = "fromnodeid",
                  target: str = "tonodeid",
                  linkid: str = "linkid",
-                 sperring = False,
+                 finn_smaa_nettverk = False,
+                 sperring = None,
                  turn_restrictions = None):
     
     veger_kopi = veger.copy()
@@ -164,16 +165,36 @@ def lag_nettverk(veger,
     else:
         veger_kopi["KOMMUNENR"] = 0
     
-    if sperring:
-        if "sperring" in veger_kopi.columns:
-            veger_kopi = veger_kopi[veger_kopi.sperring != 1] 
-    
-    
+    if "category" in veger_kopi.columns:
+        pass
+    elif "vegtype" in veger_kopi.columns:
+        veger_kopi = veger_kopi.rename(columns={"vegtype": "category"})
+    elif "roadid" in veger_kopi.columns:
+        veger_kopi["category"] = veger_kopi["roadid"].map(lambda x: x.replace('{','').replace('}','')[0])
+    else:
+        raise ValueError("Finner ikke vegkategori-kolonne")
+
+#    if "sperring" in veger_kopi.columns:
+ #       veger.loc[veger_kopi.sperring.astype(int) == 1, "sperring_kat"] = veger.loc[veger_kopi.sperring.astype(int) == 1, "category"]
+  #      veger.loc[veger_kopi.sperring.astype(int) != 1, "sperring_kat"] = np.nan
+#        cond = [
+ #           (veger_kopi.sperring.astype(int) == 1) & (veger_kopi.category == 'P'),
+  #          (veger_kopi.sperring.astype(int) == 1) & (veger_kopi.category == 'S'),
+   #         (veger_kopi.sperring.astype(int) == 1) & (veger_kopi.category != 'P') & (veger_kopi.category != 'S'),
+    #        veger_kopi.sperring.astype(int) != 1
+     #   ]
+      #  choices = ["P", "S", "ERFK", np.nan]
+       # veger_kopi["sperring_kat"] = np.select(cond, choices)
+   # else:
+    #    veger_kopi["sperring_kat"] = np.nan
+    if not "sperring" in veger_kopi.columns:
+        veger_kopi["sperring"] = -1
+        
     # litt opprydning (til utm33-koordinater, endre navn på kolonner, beholde kun relevante kolonner, resette index)
     veger_kopi = (veger_kopi
                     .to_crs(25833)
                     .rename(columns={source: "source", target: "target", linkid: "linkid"}) 
-                    [["idx", "source", "target", "linkid", drivetime_fw, drivetime_bw, "oneway", "KOMMUNENR", "geometry"]]
+                    [["idx", "source", "target", "linkid", drivetime_fw, drivetime_bw, "oneway", "sperring", "category", "KOMMUNENR", "geometry"]]
                     .reset_index(drop=True) 
                     )
     
@@ -190,19 +211,10 @@ def lag_nettverk(veger,
     
     # fjern små veger som er kutta av fra resten av vegnettet.
     # gjerne privatveger bak bom.
-    print(len(veger_kopi))
-    import time
-    print(time.perf_counter())
-    import dask_geopandas as dg
-    dask_gdf = dg.from_geopandas(veger_kopi[["geometry"]], npartitions=8)
-    dask_gdf["geometry"] = dask_gdf.buffer(0.001, resolution = 1).compute() # lavest mulig resolution for å få det fort
-    dissolvet = dask_gdf.dissolve().compute()
-    singlepart = dissolvet.explode(ignore_index=True)
-    store_nettverksdeler = singlepart[singlepart.area>5]
-    veger_kopi = veger_kopi.sjoin(store_nettverksdeler, how="inner")
-    print(len(veger_kopi))
-    print(time.perf_counter())
-    print(sum(veger_kopi.area))
+    if finn_smaa_nettverk:
+        veger_kopi = finn_smaa_nettverk(veger_kopi, storrelse=5)
+    else:
+        veger_kopi["lite_nettverk"] = np.nan
     
     if sperring:
         while np.max(veger_kopi.length) > 1001:
@@ -229,8 +241,8 @@ def lag_nettverk(veger,
     #velg ut de enveiskjørte og snu source og target for lenkene som går "feil" vei
     ft = veger_kopi[(veger_kopi.oneway=="FT") | (veger_kopi.oneway=="F")] 
     tf = veger_kopi[(veger_kopi.oneway=="TF") | (veger_kopi.oneway=="T")]
-    tf = tf.rename(columns={"source": "target", "target": "source", "source_wkt": "target_wkt", "target_wkt": "source_wkt"})
-
+    tf = tf.rename(columns={"source": "target", "target": "source", "source_wkt": "target_wkt", "target_wkt": "source_wkt"})       
+    
     #dupliser lenkene som går begge veier og snu source og target i den ene
     begge_retninger1 = veger_kopi[veger_kopi.oneway=="B"]
     begge_retninger2 = begge_retninger1.copy()
@@ -242,7 +254,15 @@ def lag_nettverk(veger,
     ft["minutter_bil"] = ft[drivetime_fw]
     tf["minutter_bil"] = tf[drivetime_bw]
 
-    veger_edges = gdf_concat([begge_retninger1, begge_retninger2, ft, tf])
+    n = veger_kopi[(veger_kopi.oneway=="N")]
+    if len(n)>0:
+        n["minutter_bil"] = np.where((n[drivetime_fw].isna()) | (n[drivetime_fw]==0) | (n[drivetime_fw]==""),
+                                     n[drivetime_bw],
+                                     n[drivetime_fw])
+        n2 = n.copy().rename(columns={"source": "target", "target": "source", "source_wkt": "target_wkt", "target_wkt": "source_wkt"})
+        veger_edges = gdf_concat([begge_retninger1, begge_retninger2, ft, tf, n, n2])
+    else:
+        veger_edges = gdf_concat([begge_retninger1, begge_retninger2, ft, tf])
 
     # lag meter-kolonne
     veger_edges["meter"] = veger_edges.length
@@ -255,17 +275,96 @@ def lag_nettverk(veger,
 
     # rydd opp (fjern eventuelle 0-verdier, velg ut kolonner, fjern duplikat-lenkene med høyest kostnad, reset index)
     veger_edges = veger_edges.loc[veger_edges["minutter_bil"] >= 0, 
-                                  ["source", "target", "source_wkt", "target_wkt", "minutter_bil", "meter", "turn_restriction", "KOMMUNENR", "geometry"]]
+                                  ["idx", "source", "target", "source_wkt", "target_wkt", "minutter_bil", "meter", "turn_restriction", "sperring", "category", "lite_nettverk", "KOMMUNENR", "geometry"]]
     
     #nye node-id-er som følger index (fordi jeg indexer med numpy arrays i avstand_til_noder())
     veger_edges = make_node_ids(veger_edges)
 
-    for col in ["source", "target", "source_wkt", "target_wkt", "turn_restriction", "KOMMUNENR"]:
+    # category-type for å spare plass
+    for col in ["source", "target", "source_wkt", "target_wkt", "turn_restriction", "category", "KOMMUNENR", "sperring"]:
         veger_edges[col] = veger_edges[col].astype(str).astype("category")
-                    
+            
     return veger_edges
 
 
+# looping er treigt, men buffer+dissolve for store områder er mye treigere. 
+# "deler" derfor dataene i ruter ved å gi kolonner koordinat-kategorier
+def koor_kat(gdf, 
+             meter = 1000, # minst mulig ruter er ikke alltid raskest. Varierer med hvor tunge dataene er.
+             x2 = False # x2=True gir en kolonne til med ruter 1/2 hakk nedover og bortover. Hvis grensetilfeller er viktig
+             ):
+    
+    # rund ned
+    gdf["koor_kat"] = round(gdf.geometry.bounds.minx/meter,1).astype(int).astype(str) + "_" + round(gdf.geometry.bounds.miny/meter,1).astype(int).astype(str)
+    
+    if x2:
+
+        gdf["koor_kat_x"] = gdf.geometry.bounds.minx / meter
+        
+        unike_x = gdf["koor_kat_x"].astype(int).unique()
+        unike_x.sort()
+        
+        for x in unike_x:
+            gdf.loc[(gdf["koor_kat_x"] >= x-0.5) & (gdf["koor_kat_x"] < x+0.5), "koor_kat_x2"] = x+0.5
+
+        # samme for y
+        gdf["koor_kat_y"] = gdf.geometry.bounds.miny/meter
+        unike_y = gdf["koor_kat_y"].astype(int).unique()
+        unike_y.sort()
+        for y in unike_y:
+            gdf.loc[(gdf["koor_kat_y"] >= y-0.5) & (gdf["koor_kat_y"] < y+0.5), "koor_kat_y2"] = y+0.5
+
+        gdf["koor_kat2"] = gdf["koor_kat_x2"].astype(str) + "_" + gdf["koor_kat_y2"].astype(str)
+
+        gdf = gdf.drop(["koor_kat_x","koor_kat_y","koor_kat_x2","koor_kat_y2"], axis=1)
+        
+    return gdf
+
+
+def finn_smaa_nettverk(veger, storrelse=5):
+    
+    veger = koor_kat(veger, meter = 2000, x2 = True)
+
+    if "sperring" in veger.columns:
+        veger2 = veger[veger.sperring.astype(int) != 1]
+        sperringer = veger[veger.sperring.astype(int) == 1]
+    else:
+        veger2 = veger.copy()
+        sperringer = veger.copy()
+        
+    kanskje_smaa_nettverk = ()
+    for kat in veger2.koor_kat.unique():
+        sperringene = sperringer.loc[sperringer.koor_kat == kat, ["geometry", "idx"]]
+        vegene = veger2.loc[veger2.koor_kat == kat, ["geometry"]]
+        vegene["geometry"] = vegene.buffer(0.001, resolution = 1) # lavest mulig resolution for å få det fort
+        dissolvet = vegene.dissolve()
+        singlepart = dissolvet.explode(ignore_index=True)
+        lite_nettverk = singlepart[singlepart.area < storrelse].unary_union
+        if lite_nettverk is not None:
+            kanskje_smaa_nettverk = kanskje_smaa_nettverk + tuple(veger2.loc[veger2.within(lite_nettverk), "idx"])
+            kanskje_smaa_nettverk = kanskje_smaa_nettverk + tuple(sperringene.loc[sperringene.intersects(lite_nettverk), "idx"])
+            kanskje_smaa_nettverk = tuple(set(kanskje_smaa_nettverk))
+            
+    kanskje_smaa_nettverk2 = ()
+    for kat in veger2.koor_kat2.unique():
+        sperringene = sperringer.loc[sperringer.koor_kat2 == kat, ["geometry", "idx"]]
+        vegene = veger2.loc[veger2.koor_kat2 == kat, ["geometry"]]
+        vegene["geometry"] = vegene.buffer(0.001, resolution = 1) # lavest mulig resolution for å få det fort
+        dissolvet = vegene.dissolve()
+        singlepart = dissolvet.explode(ignore_index=True)
+        lite_nettverk = singlepart[singlepart.area < storrelse].unary_union
+        if lite_nettverk is not None:
+            kanskje_smaa_nettverk2 = kanskje_smaa_nettverk2 + tuple(veger2.loc[veger2.within(lite_nettverk), "idx"])
+            kanskje_smaa_nettverk2 = kanskje_smaa_nettverk2 + tuple(sperringene.loc[sperringene.intersects(lite_nettverk), "idx"])
+            kanskje_smaa_nettverk2 = tuple(set(kanskje_smaa_nettverk2))
+    
+    smaa_nettverk = [x for x in kanskje_smaa_nettverk if x in kanskje_smaa_nettverk2]
+    
+    veger.loc[veger.idx.isin(smaa_nettverk), "lite_nettverk"] = 1
+    veger.loc[~veger.idx.isin(smaa_nettverk), "lite_nettverk"] = 0
+    
+    return veger
+    
 
 def turn_restr(veger_edges, turn_restrictions):
     
