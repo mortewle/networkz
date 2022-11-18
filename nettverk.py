@@ -96,7 +96,7 @@ def lag_nettverk(veger,
                  source: str = "fromnodeid",
                  target: str = "tonodeid",
                  linkid: str = "linkid",
-                 smaa_nettverk = True,
+                 isolerte_nettverk = True,
                  sperring = None,
                  turn_restrictions = None):
     
@@ -174,19 +174,6 @@ def lag_nettverk(veger,
     else:
         raise ValueError("Finner ikke vegkategori-kolonne")
 
-#    if "sperring" in veger_kopi.columns:
- #       veger.loc[veger_kopi.sperring.astype(int) == 1, "sperring_kat"] = veger.loc[veger_kopi.sperring.astype(int) == 1, "category"]
-  #      veger.loc[veger_kopi.sperring.astype(int) != 1, "sperring_kat"] = np.nan
-#        cond = [
- #           (veger_kopi.sperring.astype(int) == 1) & (veger_kopi.category == 'P'),
-  #          (veger_kopi.sperring.astype(int) == 1) & (veger_kopi.category == 'S'),
-   #         (veger_kopi.sperring.astype(int) == 1) & (veger_kopi.category != 'P') & (veger_kopi.category != 'S'),
-    #        veger_kopi.sperring.astype(int) != 1
-     #   ]
-      #  choices = ["P", "S", "ERFK", np.nan]
-       # veger_kopi["sperring_kat"] = np.select(cond, choices)
-   # else:
-    #    veger_kopi["sperring_kat"] = np.nan
     if not "sperring" in veger_kopi.columns:
         veger_kopi["sperring"] = -1
         
@@ -209,13 +196,12 @@ def lag_nettverk(veger,
         print(f"Advarsel: {len(veger_kopi)-n} multigeometrier ble splittet. Minutt-kostnader blir feil for disse.")
         #TODO: lag ny minutt-kolonne manuelt
     
-    # fjern små veger som er kutta av fra resten av vegnettet.
-    # gjerne privatveger bak bom.
-    if smaa_nettverk:
-        veger_kopi = finn_smaa_nettverk(veger_kopi, storrelse=5)
+    if isolerte_nettverk:
+        veger_kopi = finn_isolerte_nettverk(veger_kopi, storrelse=5)
     else:
-        veger_kopi["lite_nettverk"] = np.nan
+        veger_kopi["isolert"] = np.nan
     
+    #midlr.
     if sperring:
         while np.max(veger_kopi.length) > 1001:
             veger_kopi = kutt_linjer(veger_kopi, 1000)
@@ -275,7 +261,7 @@ def lag_nettverk(veger,
 
     # rydd opp (fjern eventuelle 0-verdier, velg ut kolonner, fjern duplikat-lenkene med høyest kostnad, reset index)
     veger_edges = veger_edges.loc[veger_edges["minutter_bil"] >= 0, 
-                                  ["idx", "source", "target", "source_wkt", "target_wkt", "minutter_bil", "meter", "turn_restriction", "sperring", "category", "lite_nettverk", "KOMMUNENR", "geometry"]]
+                                  ["idx", "source", "target", "source_wkt", "target_wkt", "minutter_bil", "meter", "turn_restriction", "sperring", "category", "isolert", "KOMMUNENR", "geometry"]]
     
     #nye node-id-er som følger index (fordi jeg indexer med numpy arrays i avstand_til_noder())
     veger_edges = make_node_ids(veger_edges)
@@ -321,9 +307,9 @@ def koor_kat(gdf,
     return gdf
 
 
-def finn_smaa_nettverk(veger, storrelse=5):
+def finn_isolerte_nettverk(veger, storrelse=5):
     
-    veger = koor_kat(veger, meter = 1500, x2 = True)
+    veger = koor_kat(veger, meter = 2000, x2 = True)
 
     if "sperring" in veger.columns:
         veger2 = veger[veger.sperring.astype(int) != 1]
@@ -332,7 +318,7 @@ def finn_smaa_nettverk(veger, storrelse=5):
         veger2 = veger.copy()
         sperringer = veger.copy()
         
-    kanskje_smaa_nettverk = ()
+    kanskje_isolerte_nettverk = ()
     for kat in veger2.koor_kat.unique():
         sperringene = sperringer.loc[sperringer.koor_kat == kat, ["geometry", "idx"]]
         vegene = veger2.loc[veger2.koor_kat == kat, ["geometry"]]
@@ -341,11 +327,11 @@ def finn_smaa_nettverk(veger, storrelse=5):
         singlepart = dissolvet.explode(ignore_index=True)
         lite_nettverk = singlepart[singlepart.area < storrelse].unary_union
         if lite_nettverk is not None:
-            kanskje_smaa_nettverk = kanskje_smaa_nettverk + tuple(veger2.loc[veger2.within(lite_nettverk), "idx"])
-            kanskje_smaa_nettverk = kanskje_smaa_nettverk + tuple(sperringene.loc[sperringene.intersects(lite_nettverk), "idx"])
-            kanskje_smaa_nettverk = tuple(set(kanskje_smaa_nettverk))
+            kanskje_isolerte_nettverk = kanskje_isolerte_nettverk + tuple(veger2.loc[veger2.within(lite_nettverk), "idx"])
+            kanskje_isolerte_nettverk = kanskje_isolerte_nettverk + tuple(sperringene.loc[sperringene.intersects(lite_nettverk), "idx"])
+            kanskje_isolerte_nettverk = tuple(set(kanskje_isolerte_nettverk))
             
-    kanskje_smaa_nettverk2 = ()
+    kanskje_isolerte_nettverk2 = ()
     for kat in veger2.koor_kat2.unique():
         sperringene = sperringer.loc[sperringer.koor_kat2 == kat, ["geometry", "idx"]]
         vegene = veger2.loc[veger2.koor_kat2 == kat, ["geometry"]]
@@ -354,14 +340,14 @@ def finn_smaa_nettverk(veger, storrelse=5):
         singlepart = dissolvet.explode(ignore_index=True)
         lite_nettverk = singlepart[singlepart.area < storrelse].unary_union
         if lite_nettverk is not None:
-            kanskje_smaa_nettverk2 = kanskje_smaa_nettverk2 + tuple(veger2.loc[veger2.within(lite_nettverk), "idx"])
-            kanskje_smaa_nettverk2 = kanskje_smaa_nettverk2 + tuple(sperringene.loc[sperringene.intersects(lite_nettverk), "idx"])
-            kanskje_smaa_nettverk2 = tuple(set(kanskje_smaa_nettverk2))
+            kanskje_isolerte_nettverk2 = kanskje_isolerte_nettverk2 + tuple(veger2.loc[veger2.within(lite_nettverk), "idx"])
+            kanskje_isolerte_nettverk2 = kanskje_isolerte_nettverk2 + tuple(sperringene.loc[sperringene.intersects(lite_nettverk), "idx"])
+            kanskje_isolerte_nettverk2 = tuple(set(kanskje_isolerte_nettverk2))
     
-    smaa_nettverk = [x for x in kanskje_smaa_nettverk if x in kanskje_smaa_nettverk2]
+    isolerte_nettverk = [x for x in kanskje_isolerte_nettverk if x in kanskje_isolerte_nettverk2]
     
-    veger.loc[veger.idx.isin(smaa_nettverk), "lite_nettverk"] = 1
-    veger.loc[~veger.idx.isin(smaa_nettverk), "lite_nettverk"] = 0
+    veger.loc[veger.idx.isin(isolerte_nettverk), "isolert"] = 1
+    veger.loc[~veger.idx.isin(isolerte_nettverk), "isolert"] = 0
     
     return veger
     
