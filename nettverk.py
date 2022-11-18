@@ -31,7 +31,6 @@ def network_from_geometry(veger,
     wkt_geom = [f"POINT ({x} {y})" for x, y in zip(ytterpunkter.x, ytterpunkter.y)]
     veger_kopi["source_wkt"], veger_kopi["target_wkt"] = wkt_geom[0::2], wkt_geom[1::2] # gjør annenhvert ytterpunkt til source_wkt og target_wkt
     
-    
     veger_kopi = make_node_ids(veger_kopi)
         
     if minute_col in veger_kopi.columns:
@@ -90,12 +89,101 @@ def make_node_ids(veger_kopi):
     return veger_kopi
 
 
+def finn_source(veger, source):
+    # hvis ikke angitte kolonner finnes i vegdataene, sjekk om andre kolonner matcher. 
+    # lager ny kolonne hvis ingen matcher. Gir feilmelding hvis flere enn en matcher.
+    if not source in veger.columns:
+        n = 0
+        for col in veger.columns:
+            if "from" in col and "node" in col or "source" in col:
+                source = col
+                n += 1
+        if n == 1:
+            print(f"Bruker '{source}' som source-kolonne")
+        elif n == 0:
+            veger[source] = np.nan
+        elif n > 1:
+            raise ValueError("Flere kolonner kan inneholde source-id-er")
+    return source
+
+def finn_target(veger, target):
+    if not target in veger.columns:
+        n = 0
+        for col in veger.columns:
+            if "to" in col and "node" in col or "target" in col:
+                target = col
+                n += 1
+        if n == 1:
+            print(f"Bruker '{target}' som target-kolonne")
+        elif n == 0:
+            veger[target] = np.nan
+        elif n > 1:
+            raise ValueError("Flere kolonner kan inneholde target-id-er")
+    return target
+
+def finn_linkid(veger, linkid):
+    if not linkid in veger.columns:
+        n = 0
+        for col in veger.columns:
+            if "link" in col and "id" in col:
+                linkid = col
+                n += 1
+        if n == 1:
+            print(f"Bruker '{linkid}' som linkid-kolonne")
+        elif n == 0:
+            veger[linkid] = np.nan #godta dette eller raise ValueError("Finner ikke linkid-kolonne") ?
+        elif n > 1:
+            raise ValueError("Flere kolonner kan inneholde linkid-id-er")
+    return linkid
+
+def finn_minutter(veger, minutter):
+    if isinstance(minutter, str) and minutter in veger.columns:
+        return minutter, minutter
+    if minutter[0] in veger.columns and minutter[1] in veger.columns:
+        drivetime_fw, drivetime_bw = "drivetime_fw", "drivetime_bw"            
+    elif "drivetime_fw" in veger.columns and "drivetime_bw" in veger.columns:
+        drivetime_fw, drivetime_bw = "drivetime_fw", "drivetime_bw"
+    elif "ft_minutes" in veger.columns and "tf_minutes" in veger.columns:
+        drivetime_fw, drivetime_bw = "ft_minutes", "tf_minutes"
+    else:
+        raise ValueError("Finner ikke kolonner med minutter")
+    return drivetime_fw, drivetime_bw
+
+def finn_vegkategori(veger, vegkategori):
+    if vegkategori in veger.columns:
+        pass
+    elif "category" in veger.columns:
+        pass
+    elif "vegtype" in veger.columns:
+        veger = veger.rename(columns={"vegtype": "category"})
+    elif "roadid" in veger.columns:
+        veger["category"] = veger["roadid"].map(lambda x: x.replace('{','').replace('}','')[0])
+    else:
+        raise ValueError("Finner ikke vegkategori-kolonne")
+
+def finn_og_omkod_kommunekolonne(veger, kommunekolonne):
+    if kommunekolonne in veger.columns:
+        return veger[kommunekolonne].map(lambda x: str(int(x)).zfill(4)).astype("category")
+    n = 0
+    for col in veger.columns:
+        if "komm" in col or "muni" in col:
+            komm_col = col
+            n += 1
+    if n == 1:
+        return veger[komm_col].map(lambda x: str(int(x)).zfill(4)).astype("category")
+    else:
+        return 0
+        
+
 # funksjon som tilpasser vegnettet til funksjonen graf(), som bygger grafen.
 # outputen her kan lagres i parquet så man slipper å lage nettverket hver gang.
 def lag_nettverk(veger,
                  source: str = "fromnodeid",
                  target: str = "tonodeid",
                  linkid: str = "linkid",
+                 minutter = ("drivetime_fw", "drivetime_bw"),
+                 vegkategori: str = "category",
+                 kommunekolonne = "municipality",
                  isolerte_nettverk = True,
                  sperring = None,
                  turn_restrictions = None):
@@ -107,73 +195,14 @@ def lag_nettverk(veger,
     # endre til små bokstaver
     veger_kopi.columns = [col.lower() for col in veger_kopi.columns]
 
-    # hvis ikke angitte kolonner finnes i vegdataene, sjekk om andre kolonner matcher. 
-    # lager ny kolonne hvis ingen matcher. Gir feilmelding hvis flere enn en matcher.
-    if not source in veger_kopi.columns:
-        n = 0
-        for col in veger_kopi.columns:
-            if "from" in col and "node" in col or "source" in col:
-                source = col
-                n += 1
-        if n == 1:
-            print(f"Bruker '{source}' som source-kolonne")
-        elif n == 0:
-            veger_kopi[source] = np.nan
-        elif n > 1:
-            raise ValueError("Flere kolonner kan inneholde source-id-er")
-    if not target in veger_kopi.columns:
-        n = 0
-        for col in veger_kopi.columns:
-            if "to" in col and "node" in col or "target" in col:
-                target = col
-                n += 1
-        if n == 1:
-            print(f"Bruker '{target}' som target-kolonne")
-        elif n == 0:
-            veger_kopi[target] = np.nan
-        elif n > 1:
-            raise ValueError("Flere kolonner kan inneholde target-id-er")
-    if not linkid in veger_kopi.columns:
-        n = 0
-        for col in veger_kopi.columns:
-            if "link" in col and "id" in col:
-                linkid = col
-                n += 1
-        if n == 1:
-            print(f"Bruker '{linkid}' som linkid-kolonne")
-        elif n == 0:
-            veger_kopi[linkid] = np.nan #godta dette eller raise ValueError("Finner ikke linkid-kolonne") ?
-        elif n > 1:
-            raise ValueError("Flere kolonner kan inneholde linkid-id-er")
-
-    # bestem om minuttkolonnen er 2022 eller tidligere
-    if "drivetime_fw" in veger_kopi.columns and "drivetime_bw" in veger_kopi.columns:
-        drivetime_fw, drivetime_bw = "drivetime_fw", "drivetime_bw"
-    elif "ft_minutes" in veger_kopi.columns and "tf_minutes" in veger_kopi.columns:
-        drivetime_fw, drivetime_bw = "ft_minutes", "tf_minutes"
-    else:
-        raise ValueError("Finner ikke kolonner med minutter")
-
-    # finn eventuell kommunekolonne
-    n = 0
-    for col in veger_kopi.columns:
-        if "komm" in col or "muni" in col:
-            komm_col = col
-            n += 1
-    if n == 1:
-        veger_kopi["KOMMUNENR"] = veger_kopi[komm_col].map(lambda x: str(int(x)).zfill(4)).astype("category")
-    else:
-        veger_kopi["KOMMUNENR"] = 0
+    # finn kolonner
+    source = finn_source(veger, source)
+    target = finn_target(veger, target)
+    linkid = finn_linkid(veger, linkid)
+    drivetime_fw, drivetime_bw = finn_minutter(veger, minutter)
+    finn_vegkategori(veger, vegkategori)   
+    veger["KOMMUNENR"] = finn_og_omkod_kommunekolonne(veger)
     
-    if "category" in veger_kopi.columns:
-        pass
-    elif "vegtype" in veger_kopi.columns:
-        veger_kopi = veger_kopi.rename(columns={"vegtype": "category"})
-    elif "roadid" in veger_kopi.columns:
-        veger_kopi["category"] = veger_kopi["roadid"].map(lambda x: x.replace('{','').replace('}','')[0])
-    else:
-        raise ValueError("Finner ikke vegkategori-kolonne")
-
     if not "sperring" in veger_kopi.columns:
         veger_kopi["sperring"] = -1
         
