@@ -1,13 +1,14 @@
 import geopandas as gpd
 import pandas as pd
 import numpy as np
-from networkz.stottefunksjoner import gdf_concat, bestem_ids, map_ids
-from networkz.lag_graf import lag_graf, m_til_min, m_til_treige_min
+from networkz.stottefunksjoner import gdf_concat, bestem_ids, lag_midlr_id, map_ids
+from networkz.lag_igraph import lag_graf, m_til_min, m_til_treige_min
 from shapely.geometry import LineString
 
 
 
 def shortest_path(G,
+                  nettverk,
                     startpunkter: gpd.GeoDataFrame, 
                     sluttpunkter: gpd.GeoDataFrame,
                     id_kolonne = None,
@@ -17,15 +18,16 @@ def shortest_path(G,
 
     import warnings
     warnings.filterwarnings("ignore", category=RuntimeWarning) # ignorer tåpelig advarsel
-        
-    veger = G.nettverk
-    
+            
     startpunkter = startpunkter.copy().to_crs(25833)
     sluttpunkter = sluttpunkter.copy().to_crs(25833)
 
     id_kolonner = bestem_ids(id_kolonne, startpunkter, sluttpunkter)
 
+    startpunkter, sluttpunkter = lag_midlr_id(G.noder, startpunkter, sluttpunkter)
+    
     G2, startpunkter, sluttpunkter = lag_graf(G,
+                                              nettverk,
                                               G.kostnad,
                                               startpunkter, 
                                               sluttpunkter)
@@ -51,7 +53,7 @@ def shortest_path(G,
             
             path = G2.vs[res[0]]["name"]
             
-            linje = veger.loc[(veger.source.isin(path)) & (veger.target.isin(path)), ["geometry"]]
+            linje = nettverk.loc[(nettverk.source.isin(path)) & (nettverk.target.isin(path)), ["geometry"]]
             
             linje = linje.dissolve()
             

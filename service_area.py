@@ -2,28 +2,30 @@ import geopandas as gpd
 import pandas as pd
 import numpy as np
 from shapely.geometry import LineString
-from networkz.stottefunksjoner import gdf_concat, bestem_ids, map_ids
-from networkz.lag_graf import lag_graf
+from networkz.stottefunksjoner import gdf_concat, bestem_ids, lag_midlr_id, map_ids
+from networkz.lag_igraph import lag_graf
 
 
 def service_area(G,
+                 nettverk,
                  startpunkter: gpd.GeoDataFrame,
                  kostnad,
                  id_kolonne = None, # hvis ikke id-kolonne oppgis, brukes startpunktenes geometri som id
                  ):
         
-    veger = G.nettverk
     startpunkter = startpunkter.copy().to_crs(25833)
 
     id_kolonner = bestem_ids(id_kolonne, startpunkter)
     if id_kolonne is None:
         id_kolonne = "fra"
     
+    startpunkter = lag_midlr_id(G.noder, startpunkter)
+
+    G2, startpunkter = lag_graf(G, nettverk, G.kostnad, startpunkter)
+
     if isinstance(kostnad, int) or isinstance(kostnad, str):
         kostnad = [kostnad]
         
-    G2, startpunkter = lag_graf(G, G.kostnad, startpunkter)
-
     # loop for hver kostnad og hvert startpunkt
     alle_service_areas = []   
     for i in startpunkter["nz_idx"]:
@@ -43,8 +45,8 @@ def service_area(G,
                 continue
             
             # velg ut vegene som er i dataframen vi nettopp lagde. Og dissolve til én rad.
-            sa = (veger
-                .loc[veger.target.isin(df.name), ["geometry"]]
+            sa = (nettverk
+                .loc[nettverk.target.isin(df.name), ["geometry"]]
                 .dissolve()
                 .reset_index(drop=True)
             )

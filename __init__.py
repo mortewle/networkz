@@ -1,8 +1,8 @@
 
 __version__ = "0.2.0"
 
-# Let users know if they're missing any of our hard dependencies (kopiert fra pandas' __init__)
-_hard_dependencies = ("numpy", "pandas", "geopandas", "igraph")
+# sjekk om manglende dependencies (kopiert fra pandas' __init__)
+_hard_dependencies = ("numpy", "pandas", "geopandas", "igraph", "sklearn")
 _missing_dependencies = []
 
 for _dependency in _hard_dependencies:
@@ -17,7 +17,8 @@ if _missing_dependencies:
     )
 del _hard_dependencies, _dependency, _missing_dependencies
 
-from networkz.graf import Graf
+from networkz.graf_class import Graf
+from networkz.nettverksclass import Nettverk
 
 from networkz.nettverk import lag_nettverk, network_from_geometry
 

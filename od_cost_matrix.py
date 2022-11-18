@@ -2,28 +2,33 @@ import geopandas as gpd
 import pandas as pd
 import numpy as np
 import pygeos
-from networkz.stottefunksjoner import bestem_ids, map_ids
-from networkz.lag_graf import lag_graf, m_til_min, m_til_treige_min
+from networkz.stottefunksjoner import bestem_ids, lag_midlr_id, map_ids
+from networkz.lag_igraph import lag_graf, m_til_min, m_til_treige_min
+
 
 
 def od_cost_matrix(G,
+                   nettverk,
                     startpunkter: gpd.GeoDataFrame, 
                     sluttpunkter: gpd.GeoDataFrame,
                     id_kolonne = None,
-                    returner_linjer = False, # om man vil at rette linjer mellom start- og sluttpunktene returnert
+                    linjer = False, # om man vil at rette linjer mellom start- og sluttpunktene returnert
                     radvis = False, # hvis False beregnes kostnaden fra alle startpunkter til alle sluttpunkter. 
                     cutoff: int = None,
                     destination_count: int = None,
                     ):
-        
+    
     startpunkter = startpunkter.copy().to_crs(25833)
     sluttpunkter = sluttpunkter.copy().to_crs(25833)
 
     id_kolonner = bestem_ids(id_kolonne, startpunkter, sluttpunkter)
- 
-    def kjor_od_cost(G, kostnad, startpunkter, sluttpunkter, radvis):
+
+    startpunkter, sluttpunkter = lag_midlr_id(G.noder, startpunkter, sluttpunkter)
+     
+    def kjor_od_cost(G, nettverk, kostnad, startpunkter, sluttpunkter, radvis):
         
         G2, startpunkter, sluttpunkter = lag_graf(G,
+                                                  nettverk,
                                                   kostnad,
                                                   startpunkter, 
                                                   sluttpunkter)
@@ -75,12 +80,12 @@ def od_cost_matrix(G,
         
     # kjør funksjonen én eller to ganger avhengig av hvor mange kostnader man har
     if isinstance(G.kostnad, str): 
-        out = kjor_od_cost(G, G.kostnad, startpunkter, sluttpunkter, radvis)
+        out = kjor_od_cost(G, nettverk, G.kostnad, startpunkter, sluttpunkter, radvis)
         
     else:
         if len(G.kostnad)==2:
-            df = kjor_od_cost(G, G.kostnad[0], startpunkter, sluttpunkter, radvis)
-            df2 = kjor_od_cost(G, G.kostnad[1], startpunkter, sluttpunkter, radvis)
+            df = kjor_od_cost(G, nettverk, G.kostnad[0], startpunkter, sluttpunkter, radvis)
+            df2 = kjor_od_cost(G, nettverk, G.kostnad[1], startpunkter, sluttpunkter, radvis)
             out = df.merge(df2[["fra", "til", G.kostnad[1]]], on = ["fra", "til"], how="outer")
         else:
             raise ValueError("Kan bare beregne 'meter' og 'minutter'")
@@ -106,7 +111,7 @@ def od_cost_matrix(G,
         out = out.loc[out.groupby('fra')[kost].idxmin()].reset_index(drop=True)
 
     # lag linjer mellom start og slutt
-    if returner_linjer:        
+    if linjer:        
         fra = pygeos.from_shapely(gpd.GeoSeries.from_wkt(out["wkt_fra"], crs=25833))
         til =  pygeos.from_shapely(gpd.GeoSeries.from_wkt(out["wkt_til"], crs=25833))
         out["geometry"] = pygeos.shortest_line(fra, til)

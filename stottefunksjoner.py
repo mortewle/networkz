@@ -105,7 +105,7 @@ def tilfeldige_punkter(n, mask=None):
 
 # funksjon som sjekker om id-kolonnene finnes, eller om geometri (wkt) skal brukes
 # returnerer tuple med kolonnenavn for start- og sluttpunktene
-# unødvendig komplisert kanskje, men funker
+# TODO: forenkle dette, unngå if/else
 def bestem_ids(id_kolonne, startpunkter, sluttpunkter=None) -> tuple:
     if id_kolonne is None:
         if sluttpunkter is None:
@@ -136,8 +136,24 @@ def bestem_ids(id_kolonne, startpunkter, sluttpunkter=None) -> tuple:
         raise ValueError("id_kolonne er verken None, string, liste eller tuple.")
 
 
-def map_ids(df, id_kolonner, startpunkter, sluttpunkter=None):
+def lag_midlr_id(noder, startpunkter, sluttpunkter=None):
+    startpunkter["nz_idx"] = range(len(startpunkter))
+    startpunkter["nz_idx"] = startpunkter["nz_idx"] + np.max(noder.node_id.astype(int)) + 1
+    startpunkter["nz_idx"] = startpunkter["nz_idx"].astype(str)
+        
+    if sluttpunkter is None:
+        return startpunkter
+
+    sluttpunkter["nz_idx"] = range(len(sluttpunkter))
+    sluttpunkter["nz_idx"] = sluttpunkter["nz_idx"] + np.max(startpunkter.nz_idx.astype(int)) + 1
+    sluttpunkter["nz_idx"] = sluttpunkter["nz_idx"].astype(str)
     
+    return startpunkter, sluttpunkter
+
+
+def map_ids(df, id_kolonner, startpunkter, sluttpunkter=None):
+
+    # hvis id_kolonne er oppgitt, map/koble tilbake denne id-en    
     if not "geom_wkt" in id_kolonner:
         id_dict_start = {nz_idx: idd  for idd, nz_idx in zip(startpunkter[id_kolonner[0]], startpunkter["nz_idx"])}
         if sluttpunkter is None:
@@ -147,6 +163,7 @@ def map_ids(df, id_kolonner, startpunkter, sluttpunkter=None):
             id_dict_slutt = {nz_idx: idd  for idd, nz_idx in zip(sluttpunkter[id_kolonner[1]], sluttpunkter["nz_idx"])}
             df["til"] = df["til"].map(id_dict_slutt)
     
+    # hvis ingen id_kolonne er oppgitt, brukes geometrien i wkt-format
     else:
         id_dict_start = {nz_idx: idd.wkt  for idd, nz_idx in zip(startpunkter.geometry, startpunkter["nz_idx"])}
         df["fra"] = df["fra"].map(id_dict_start)
