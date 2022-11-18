@@ -14,7 +14,7 @@ from copy import copy, deepcopy
 
 class Graf(Nettverk):
     """ class som inneholder vegnettet, nodene og regler for hvordan nettverksanalysen skal gjennomføres """
-        
+    
     def __init__(self,
                  
                  # disse handler om hvilket nettverk som skal leses inn, og hvilket område som skal beholdes
@@ -32,7 +32,7 @@ class Graf(Nettverk):
                  
                  # regler for hvordan man vil koble punkter til noder. Om man vil ha mest mulig fullstendige eller mest mulig riktige resultater.
                  search_tolerance = 5000, 
-                 dist_konstant = 25,
+                 dist_konstant = 10,
                  kost_til_nodene = True,
                  naboer = 100,
                  
@@ -192,12 +192,16 @@ class Graf(Nettverk):
 
 
 def main():
+    
+    import numpy as np
 
     punkter = gpd.read_parquet(f"C:/Users/ort/OneDrive - Statistisk sentralbyrå/data/tilfeldige_adresser_1000.parquet")
 
     G = Graf(aar = 2021,
                 sperring=None,
                 fjern_isolerte=False)
+    
+    punkter_sample = punkter.sample(1)
     
     resultater = []
     for sperring in [None, "P", "ERFKS", "ERFKPS"]:
@@ -208,7 +212,7 @@ def main():
             G2.fjern_isolerte = fjern_isolerte
             G2.sperring = sperring
             
-            od = G.od_cost_matrix(punkter,
+            od = G.od_cost_matrix(punkter_sample,
                                     punkter, 
                                     id_kolonne="idx")
 
