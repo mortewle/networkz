@@ -1,30 +1,16 @@
-import geopandas as gpd
-import pandas as pd
 import numpy as np
-import pygeos
 import igraph
 from sklearn.neighbors import NearestNeighbors
-from networkz.stottefunksjoner import fjern_tomme_geometrier
 
 
+        
 def lag_graf(G,
+             nettverk,
              kostnad,
              startpunkter,
              sluttpunkter=None
              ):
-    
-    nettverk = G.nettverk.copy()
-    noder = G.noder
-                                    
-    startpunkter["nz_idx"] = range(len(startpunkter))
-    startpunkter["nz_idx"] = startpunkter["nz_idx"] + np.max(noder.node_id.astype(int)) + 1
-    startpunkter["nz_idx"] = startpunkter["nz_idx"].astype(str)
-    
-    if sluttpunkter is not None:
-        sluttpunkter["nz_idx"] = range(len(sluttpunkter))
-        sluttpunkter["nz_idx"] = sluttpunkter["nz_idx"] + np.max(startpunkter.nz_idx.astype(int)) + 1
-        sluttpunkter["nz_idx"] = sluttpunkter["nz_idx"].astype(str)
-
+                              
     # alle lenkene og kostnadene i nettverket 
     edges = [(str(fra), str(til)) for fra, til in zip(nettverk["source"], nettverk["target"])]
     kostnader = list(nettverk[kostnad])
@@ -110,10 +96,7 @@ def avstand_til_noder(punkter, G, hva):
     noder.node_id = noder.node_id.astype(int)
     noder = noder.sort_values("node_id")
     noder.node_id = noder.node_id.astype(str)
-    
-    if (len(noder)-1) != np.max(noder.node_id.astype(int)):
-        raise ValueError("Nodenes node_id er ikke identisk med index.")
-    
+        
     # arrays med koordinat-tupler
     punkter_array = np.array([(x, y) for x, y in zip(punkter.geometry.x, punkter.geometry.y)])
     noder_array = np.array([(x, y) for x, y in zip(noder.geometry.x, noder.geometry.y)])
