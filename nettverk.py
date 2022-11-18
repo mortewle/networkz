@@ -3,177 +3,7 @@ import pandas as pd
 import geopandas as gpd
 import pygeos
 from networkz.stottefunksjoner import fjern_tomme_geometrier, gdf_concat, les_geoparquet, kutt_linjer
-
-
-def network_from_geometry(veger, 
-                          minute_col = None):
-    
-    veger_kopi = veger.copy()
-    
-    veger_kopi["idx"] = veger_kopi.index
-    
-    veger_kopi = veger_kopi.to_crs(25833)
-    veger_kopi = fjern_tomme_geometrier(veger_kopi)
-    veger_kopi["geometry"] = pygeos.line_merge(pygeos.force_2d(pygeos.from_shapely(veger_kopi.geometry)))   
-    n = len(veger_kopi)
-    veger_kopi = veger_kopi.explode(ignore_index=True)
-    if len(veger_kopi)<n and minute_col is not None:
-        print(f"Advarsel: {len(veger_kopi)-n} multigeometrier ble splittet. Minutt-kostnader blir feil for disse.")
-        #TODO: lag ny minutt-kolonne manuelt her
-    
-    # nye node-id-er fra endepunkter som følger index (fordi jeg indexer med numpy arrays i avstand_til_noder())   
-    ytterpunkter = veger_kopi.copy()
-    ytterpunkter["geometry"] = ytterpunkter.geometry.boundary 
-    sirkler = ytterpunkter.loc[ytterpunkter.is_empty, "idx"] #sirkler har tom boundary
-    veger_kopi = veger_kopi[~veger_kopi.idx.isin(sirkler)]
-
-    ytterpunkter = veger_kopi.geometry.boundary.explode(ignore_index=True) # boundary gir multipunkt med to ytterpunkter for hver linje, og explode() (til singlepart) gir en dobbelt så lang tabell med enkeltpunkter
-    wkt_geom = [f"POINT ({x} {y})" for x, y in zip(ytterpunkter.x, ytterpunkter.y)]
-    veger_kopi["source_wkt"], veger_kopi["target_wkt"] = wkt_geom[0::2], wkt_geom[1::2] # gjør annenhvert ytterpunkt til source_wkt og target_wkt
-    
-    veger_kopi = make_node_ids(veger_kopi)
-        
-    if minute_col in veger_kopi.columns:
-        veger_kopi["minutter"] = veger_kopi[minute_col]
-        veger_kopi = veger_kopi[veger_kopi["minutter"] >= 0, 
-                                ["source_wkt", "target_wkt", "minutter", "meter", "geometry"]]    
-    else:
-        veger_kopi = veger_kopi[veger_kopi["meter"] >= 0,
-                                ["source_wkt", "target_wkt", "meter", "geometry"]]
-
-    for col in ["source", "target", "source_wkt", "target_wkt"]:
-        veger_kopi[col] = veger_kopi[col].astype(str).astype("category")
-    
-    veger_kopi["turn_restriction"] = False
-    
-    return veger_kopi
-
-
-# nye node-id-er som følger index (fordi jeg indexer med numpy arrays i avstand_til_noder())
-def make_node_ids(veger_kopi):
-
-#    while np.max(veger_kopi.length)>50:
- #       veger_kopi = kutt_linjer(veger_kopi, 50)
-  #      print(np.max(veger_kopi.length))
-    
-    sources = veger_kopi[["source_wkt"]].rename(columns={"source_wkt":"wkt"})  
-    targets = veger_kopi[["target_wkt"]].rename(columns={"target_wkt":"wkt"})
-    noder = (pd.concat([sources, targets], axis=0, ignore_index=True)
-                .drop_duplicates(subset=["wkt"])
-                .reset_index(drop=True) # viktig at node_id følger index for å kunne indekse på numpy arrays i graf()
-    )
-    noder["node_id"] = noder.index
-    noder["node_id"] = noder["node_id"].astype(str) # funker ikke med numeriske node-navn i igraph, pussig nok...
-    
-    #koble på de nye node-id-ene
-    veger_kopi = (veger_kopi
-            .drop(["source", "target", "nz_idx"], axis=1, errors="ignore")
-            .merge(noder, left_on = "source_wkt", right_on = "wkt", how="inner")
-            .rename(columns={"node_id":"source"})
-            .drop("wkt",axis=1)
-            .merge(noder, left_on = "target_wkt", right_on = "wkt", how="inner")
-            .rename(columns={"node_id":"target"})
-            .drop("wkt",axis=1)
-    )
-    
-    veger_kopi["meter"] = veger_kopi.length
-    
-    # fjern duplikatlenkene med høyest kostnad (siden disse aldri vil bli brukt)
-    if "minutter" in veger_kopi.columns:
-        veger_kopi = veger_kopi.sort_values("minutter", ascending=True)
-    else:     
-        veger_kopi = veger_kopi.sort_values("meter", ascending=True)
-             
-    veger_kopi.drop_duplicates(subset=["source", "target"]).reset_index(drop=True)
-
-    return veger_kopi
-
-
-def finn_source(veger, source):
-    # hvis ikke angitte kolonner finnes i vegdataene, sjekk om andre kolonner matcher. 
-    # lager ny kolonne hvis ingen matcher. Gir feilmelding hvis flere enn en matcher.
-    if not source in veger.columns:
-        n = 0
-        for col in veger.columns:
-            if "from" in col and "node" in col or "source" in col:
-                source = col
-                n += 1
-        if n == 1:
-            print(f"Bruker '{source}' som source-kolonne")
-        elif n == 0:
-            veger[source] = np.nan
-        elif n > 1:
-            raise ValueError("Flere kolonner kan inneholde source-id-er")
-    return source
-
-def finn_target(veger, target):
-    if not target in veger.columns:
-        n = 0
-        for col in veger.columns:
-            if "to" in col and "node" in col or "target" in col:
-                target = col
-                n += 1
-        if n == 1:
-            print(f"Bruker '{target}' som target-kolonne")
-        elif n == 0:
-            veger[target] = np.nan
-        elif n > 1:
-            raise ValueError("Flere kolonner kan inneholde target-id-er")
-    return target
-
-def finn_linkid(veger, linkid):
-    if not linkid in veger.columns:
-        n = 0
-        for col in veger.columns:
-            if "link" in col and "id" in col:
-                linkid = col
-                n += 1
-        if n == 1:
-            print(f"Bruker '{linkid}' som linkid-kolonne")
-        elif n == 0:
-            veger[linkid] = np.nan #godta dette eller raise ValueError("Finner ikke linkid-kolonne") ?
-        elif n > 1:
-            raise ValueError("Flere kolonner kan inneholde linkid-id-er")
-    return linkid
-
-def finn_minutter(veger, minutter):
-    if isinstance(minutter, str) and minutter in veger.columns:
-        return minutter, minutter
-    if minutter[0] in veger.columns and minutter[1] in veger.columns:
-        drivetime_fw, drivetime_bw = "drivetime_fw", "drivetime_bw"            
-    elif "drivetime_fw" in veger.columns and "drivetime_bw" in veger.columns:
-        drivetime_fw, drivetime_bw = "drivetime_fw", "drivetime_bw"
-    elif "ft_minutes" in veger.columns and "tf_minutes" in veger.columns:
-        drivetime_fw, drivetime_bw = "ft_minutes", "tf_minutes"
-    else:
-        raise ValueError("Finner ikke kolonner med minutter")
-    return drivetime_fw, drivetime_bw
-
-def finn_vegkategori(veger, vegkategori):
-    if vegkategori in veger.columns:
-        pass
-    elif "category" in veger.columns:
-        pass
-    elif "vegtype" in veger.columns:
-        veger = veger.rename(columns={"vegtype": "category"})
-    elif "roadid" in veger.columns:
-        veger["category"] = veger["roadid"].map(lambda x: x.replace('{','').replace('}','')[0])
-    else:
-        raise ValueError("Finner ikke vegkategori-kolonne")
-
-def finn_og_omkod_kommunekolonne(veger, kommunekolonne):
-    if kommunekolonne in veger.columns:
-        return veger[kommunekolonne].map(lambda x: str(int(x)).zfill(4)).astype("category")
-    n = 0
-    for col in veger.columns:
-        if "komm" in col or "muni" in col:
-            komm_col = col
-            n += 1
-    if n == 1:
-        return veger[komm_col].map(lambda x: str(int(x)).zfill(4)).astype("category")
-    else:
-        return 0
-        
+       
 
 # funksjon som tilpasser vegnettet til funksjonen graf(), som bygger grafen.
 # outputen her kan lagres i parquet så man slipper å lage nettverket hver gang.
@@ -451,4 +281,177 @@ def turn_restr(veger, turn_restrictions):
     return gdf_concat([veger_edges, dobbellenker])
  
 
+# lag retningsløst nettverk
+def network_from_geometry(veger, 
+                          minute_col = None):
     
+    veger_kopi = veger.copy()
+    
+    veger_kopi["idx"] = veger_kopi.index
+    
+    veger_kopi = veger_kopi.to_crs(25833)
+    veger_kopi = fjern_tomme_geometrier(veger_kopi)
+    veger_kopi["geometry"] = pygeos.line_merge(pygeos.force_2d(pygeos.from_shapely(veger_kopi.geometry)))   
+    n = len(veger_kopi)
+    veger_kopi = veger_kopi.explode(ignore_index=True)
+    if len(veger_kopi)<n and minute_col is not None:
+        print(f"Advarsel: {len(veger_kopi)-n} multigeometrier ble splittet. Minutt-kostnader blir feil for disse.")
+        #TODO: lag ny minutt-kolonne manuelt her
+    
+    # nye node-id-er fra endepunkter som følger index (fordi jeg indexer med numpy arrays i avstand_til_noder())   
+    ytterpunkter = veger_kopi.copy()
+    ytterpunkter["geometry"] = ytterpunkter.geometry.boundary 
+    sirkler = ytterpunkter.loc[ytterpunkter.is_empty, "idx"] #sirkler har tom boundary
+    veger_kopi = veger_kopi[~veger_kopi.idx.isin(sirkler)]
+
+    ytterpunkter = veger_kopi.geometry.boundary.explode(ignore_index=True) # boundary gir multipunkt med to ytterpunkter for hver linje, og explode() (til singlepart) gir en dobbelt så lang tabell med enkeltpunkter
+    wkt_geom = [f"POINT ({x} {y})" for x, y in zip(ytterpunkter.x, ytterpunkter.y)]
+    veger_kopi["source_wkt"], veger_kopi["target_wkt"] = wkt_geom[0::2], wkt_geom[1::2] # gjør annenhvert ytterpunkt til source_wkt og target_wkt
+    
+    veger_kopi = make_node_ids(veger_kopi)
+        
+    if minute_col in veger_kopi.columns:
+        veger_kopi["minutter"] = veger_kopi[minute_col]
+        veger_kopi = veger_kopi[veger_kopi["minutter"] >= 0, 
+                                ["source_wkt", "target_wkt", "minutter", "meter", "geometry"]]    
+    else:
+        veger_kopi = veger_kopi[veger_kopi["meter"] >= 0,
+                                ["source_wkt", "target_wkt", "meter", "geometry"]]
+
+    for col in ["source", "target", "source_wkt", "target_wkt"]:
+        veger_kopi[col] = veger_kopi[col].astype(str).astype("category")
+    
+    veger_kopi["turn_restriction"] = False
+    
+    return veger_kopi
+
+
+# nye node-id-er som følger index (fordi jeg indexer med numpy arrays i avstand_til_noder())
+def make_node_ids(veger_kopi):
+
+#    while np.max(veger_kopi.length)>50:
+ #       veger_kopi = kutt_linjer(veger_kopi, 50)
+  #      print(np.max(veger_kopi.length))
+    
+    sources = veger_kopi[["source_wkt"]].rename(columns={"source_wkt":"wkt"})  
+    targets = veger_kopi[["target_wkt"]].rename(columns={"target_wkt":"wkt"})
+    noder = (pd.concat([sources, targets], axis=0, ignore_index=True)
+                .drop_duplicates(subset=["wkt"])
+                .reset_index(drop=True) # viktig at node_id følger index for å kunne indekse på numpy arrays i graf()
+    )
+    noder["node_id"] = noder.index
+    noder["node_id"] = noder["node_id"].astype(str) # funker ikke med numeriske node-navn i igraph, pussig nok...
+    
+    #koble på de nye node-id-ene
+    veger_kopi = (veger_kopi
+            .drop(["source", "target", "nz_idx"], axis=1, errors="ignore")
+            .merge(noder, left_on = "source_wkt", right_on = "wkt", how="inner")
+            .rename(columns={"node_id":"source"})
+            .drop("wkt",axis=1)
+            .merge(noder, left_on = "target_wkt", right_on = "wkt", how="inner")
+            .rename(columns={"node_id":"target"})
+            .drop("wkt",axis=1)
+    )
+    
+    veger_kopi["meter"] = veger_kopi.length
+    
+    # fjern duplikatlenkene med høyest kostnad (siden disse aldri vil bli brukt)
+    if "minutter" in veger_kopi.columns:
+        veger_kopi = veger_kopi.sort_values("minutter", ascending=True)
+    else:     
+        veger_kopi = veger_kopi.sort_values("meter", ascending=True)
+             
+    veger_kopi.drop_duplicates(subset=["source", "target"]).reset_index(drop=True)
+
+    return veger_kopi
+
+
+def finn_source(veger, source):
+    # hvis ikke angitte kolonner finnes i vegdataene, sjekk om andre kolonner matcher. 
+    # lager ny kolonne hvis ingen matcher. Gir feilmelding hvis flere enn en matcher.
+    if not source in veger.columns:
+        n = 0
+        for col in veger.columns:
+            if "from" in col and "node" in col or "source" in col:
+                source = col
+                n += 1
+        if n == 1:
+            print(f"Bruker '{source}' som source-kolonne")
+        elif n == 0:
+            veger[source] = np.nan
+        elif n > 1:
+            raise ValueError("Flere kolonner kan inneholde source-id-er")
+    return source
+
+
+def finn_target(veger, target):
+    if not target in veger.columns:
+        n = 0
+        for col in veger.columns:
+            if "to" in col and "node" in col or "target" in col:
+                target = col
+                n += 1
+        if n == 1:
+            print(f"Bruker '{target}' som target-kolonne")
+        elif n == 0:
+            veger[target] = np.nan
+        elif n > 1:
+            raise ValueError("Flere kolonner kan inneholde target-id-er")
+    return target
+
+
+def finn_linkid(veger, linkid):
+    if not linkid in veger.columns:
+        n = 0
+        for col in veger.columns:
+            if "link" in col and "id" in col:
+                linkid = col
+                n += 1
+        if n == 1:
+            print(f"Bruker '{linkid}' som linkid-kolonne")
+        elif n == 0:
+            veger[linkid] = np.nan #godta dette eller raise ValueError("Finner ikke linkid-kolonne") ?
+        elif n > 1:
+            raise ValueError("Flere kolonner kan inneholde linkid-id-er")
+    return linkid
+
+
+def finn_minutter(veger, minutter):
+    if isinstance(minutter, str) and minutter in veger.columns:
+        return minutter, minutter
+    if minutter[0] in veger.columns and minutter[1] in veger.columns:
+        drivetime_fw, drivetime_bw = "drivetime_fw", "drivetime_bw"            
+    elif "drivetime_fw" in veger.columns and "drivetime_bw" in veger.columns:
+        drivetime_fw, drivetime_bw = "drivetime_fw", "drivetime_bw"
+    elif "ft_minutes" in veger.columns and "tf_minutes" in veger.columns:
+        drivetime_fw, drivetime_bw = "ft_minutes", "tf_minutes"
+    else:
+        raise ValueError("Finner ikke kolonner med minutter")
+    return drivetime_fw, drivetime_bw
+
+
+def finn_vegkategori(veger, vegkategori):
+    if vegkategori in veger.columns:
+        pass
+    elif "category" in veger.columns:
+        pass
+    elif "vegtype" in veger.columns:
+        veger = veger.rename(columns={"vegtype": "category"})
+    elif "roadid" in veger.columns:
+        veger["category"] = veger["roadid"].map(lambda x: x.replace('{','').replace('}','')[0])
+    else:
+        raise ValueError("Finner ikke vegkategori-kolonne")
+
+
+def finn_og_omkod_kommunekolonne(veger, kommunekolonne):
+    if kommunekolonne in veger.columns:
+        return veger[kommunekolonne].map(lambda x: str(int(x)).zfill(4)).astype("category")
+    n = 0
+    for col in veger.columns:
+        if "komm" in col or "muni" in col:
+            komm_col = col
+            n += 1
+    if n == 1:
+        return veger[komm_col].map(lambda x: str(int(x)).zfill(4)).astype("category")
+    else:
+        return 0
