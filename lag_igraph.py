@@ -5,15 +5,14 @@ from sklearn.neighbors import NearestNeighbors
 
         
 def lag_graf(G,
-             nettverk,
              kostnad,
              startpunkter,
              sluttpunkter=None
              ):
                               
     # alle lenkene og kostnadene i nettverket 
-    edges = [(str(fra), str(til)) for fra, til in zip(nettverk["source"], nettverk["target"])]
-    kostnader = list(nettverk[kostnad])
+    edges = [(str(fra), str(til)) for fra, til in zip(G.nettverk["source"], G.nettverk["target"])]
+    kostnader = list(G.nettverk[kostnad])
 
     # lenker mellom startpunktene og nærmeste noder
     edges_start, avstander_start, startpunkter = avstand_til_noder(startpunkter, 
@@ -52,9 +51,10 @@ def lag_graf(G,
     # lag liste med tuples med lenker og legg dem til i grafen 
     G2 = igraph.Graph.TupleList(edges, directed=G.directed)
     G2.es['weight'] = kostnader
-    
+        
     if sluttpunkter is None:
         return G2, startpunkter
+
     return G2, startpunkter, sluttpunkter
 
 
@@ -91,11 +91,6 @@ def avstand_til_noder(punkter, G, hva):
     noder = G.noder
     
     punkter = punkter.reset_index(drop=True)
-    
-    # sørg for at nodene er i riktig, numerisk rekkefølge
-    noder.node_id = noder.node_id.astype(int)
-    noder = noder.sort_values("node_id")
-    noder.node_id = noder.node_id.astype(str)
         
     # arrays med koordinat-tupler
     punkter_array = np.array([(x, y) for x, y in zip(punkter.geometry.x, punkter.geometry.y)])
@@ -108,8 +103,8 @@ def avstand_til_noder(punkter, G, hva):
     
     punkter["dist_node"] = np.min(avstander, axis=1)
     
-    # så en stygg list comprehension fram til jeg finner noe enklere
-    # når punktene er sluttpunkter, må lenkene snus, altså fra node_id til sluttpunkt
+    # så noen stygge list comprehensions fram til jeg finner noe enklere
+    # motsatt retning for sluttpunkter
     if hva=="start":
         edges = np.array([[(nz_idx, node_id)
                 for node_id in idxs[i]]
@@ -123,10 +118,10 @@ def avstand_til_noder(punkter, G, hva):
                           if dist <= G.search_tolerance and dist <= (dist_min*(1+G.dist_konstant/100)+G.dist_konstant) else 0
                           for dist in avstander[i]] 
                           for i, dist_min in zip(punkter.index, punkter.dist_node)])
-    
+         
     # velg ut alt som er under search_tolerance
-    edges = edges[avstander!=0]
-    avstander = avstander[avstander!=0]
+    edges = edges[avstander != 0]
+    avstander = avstander[avstander != 0]
     punkter = punkter[punkter.dist_node <= G.search_tolerance]
     
     # flat ut listene
