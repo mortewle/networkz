@@ -28,11 +28,11 @@ class Graf(Nettverk):
                  directed=True, 
                  turn_restrictions=False, #midlr false
                  sperring = "ERFKPS", # hvilke vegkategorier hvor vegbommer skal være til hinder. Så hvis sperring=='ERFK_S', er det lov å kjøre gjennom private bommer. Hvis sperring er None, er alle bommer lov.
-                 fjern_isolerte = True,
+                 fjern_isolerte = True, 
                  
                  # regler for hvordan man vil koble punkter til noder. Om man vil ha mest mulig fullstendige eller mest mulig riktige resultater.
                  search_tolerance = 5000, 
-                 dist_konstant = 10,
+                 dist_konstant = 25,
                  kost_til_nodene = True,
                  naboer = 100,
                  
@@ -42,7 +42,7 @@ class Graf(Nettverk):
                  ):
         
         self._aar = aar
-        self._nettverk = nettverk               
+        self.nettverk = nettverk               
         self._kjoretoy = kjoretoy
         self._kommuner = kommuner
         self.directed = directed
@@ -57,11 +57,11 @@ class Graf(Nettverk):
         self.fart_fot = fart_fot
         
         # hent og klargjør nettverket for året og kommunene som er angitt
-        self._nettverk, self.nettverkssti = self.hent_nettverk()
-        self._nettverk, self._kommuner = self.velg_kommuner_eller_ikke()
+        self.nettverk, self.nettverkssti = self.hent_nettverk()
+        self.nettverk, self._kommuner = self.velg_kommuner_eller_ikke()
         self._kostnad = self.bestem_kostnad(kostnad)
-        self._nettverk = self.omkod_minutter()
-        self._noder = self.lag_noder(self._nettverk)
+        self.nettverk = self.omkod_minutter()
+        self._noder = self.lag_noder()
 
 
     def od_cost_matrix(self, 
@@ -75,10 +75,10 @@ class Graf(Nettverk):
                         ):
         
         # lager kopi av det filtrerte nettverket for å ikke endre på det opprinnelige
-        nettverk = self.filtrer_nettverket()
-        self._noder = self.lag_noder(nettverk)
+        self.nettverk = self.filtrer_nettverket()
+        self._noder = self.lag_noder()
                          
-        return od_cost_matrix(self, nettverk, startpunkter, sluttpunkter, id_kolonne, linjer, radvis, cutoff, destination_count)
+        return od_cost_matrix(self, startpunkter, sluttpunkter, id_kolonne, linjer, radvis, cutoff, destination_count)
 
 
     def service_area(self,
@@ -87,13 +87,13 @@ class Graf(Nettverk):
                      id_kolonne = None
                      ):
         
-        nettverk = self.filtrer_nettverket()
-        self._noder = self.lag_noder(nettverk)
+        self.nettverk = self.filtrer_nettverket()
+        self._noder = self.lag_noder()
 
         if not isinstance(self.kostnad, str):
             raise ValueError("Kan bare ha én kostnad i service_area")
         
-        return service_area(self, nettverk, startpunkter, kostnad, id_kolonne)
+        return service_area(self, startpunkter, kostnad, id_kolonne)
 
 
     def shortest_path(self,
@@ -104,13 +104,13 @@ class Graf(Nettverk):
                         destination_count: int = None,
                         ):
 
-        nettverk = self.filtrer_nettverket()
-        self._noder = self.lag_noder(nettverk)
+        self.nettverk = self.filtrer_nettverket()
+        self._noder = self.lag_noder()
         
         if not isinstance(self.kostnad, str):
             raise ValueError("Kan bare ha én kostnad i shortest_path")
         
-        return shortest_path(self, nettverk, startpunkter, sluttpunkter, id_kolonne, cutoff, destination_count)
+        return shortest_path(self, startpunkter, sluttpunkter, id_kolonne, cutoff, destination_count)
     
     
     # for å få gjeldende attributter når man printer class-objektet
@@ -118,15 +118,12 @@ class Graf(Nettverk):
         for attr, val in self.__dict__.items():
             if attr=="nettverkssti" or attr=="_noder":
                 continue
-            elif attr=="nettverk" and isinstance(val, gpd.GeoDataFrame):
-                try:
-                    print(f"{attr} = GeoDataFrame hentet fra: {self.nettverkssti},")    
-                except AttributeError:
-                    print(f"{attr} = GeoDataFrame,")
-            elif isinstance(val, str):
-                print(f"{attr.strip('_')} = '{val}',")
+            elif attr=="nettverk" and self.nettverkssti:
+                print(f"{attr} = GeoDataFrame hentet fra: {self.nettverkssti},")    
             elif isinstance(val, gpd.GeoDataFrame):
                 print(f"{attr.strip('_')} = GeoDataFrame,")                
+            elif isinstance(val, str):
+                print(f"{attr.strip('_')} = '{val}',")
             else:
                 print(f"{attr.strip('_')} = {val},")
         return "\n"
@@ -144,21 +141,8 @@ class Graf(Nettverk):
         print("dist_konstant: ")
         print("km_t_til_nodene: ")
  
-        
-    # sørg for at nodene oppdaterer seg når nettverket endres
-    @property
-    def nettverk(self):
-        return self._nettverk
     
-    @nettverk.setter
-    def nettverk(self, endret_nettverk):  
-        if len(self._nettverk)!=len(endret_nettverk):
-            self._nettverk = make_node_ids(endret_nettverk)
-        self._noder = self.lag_noder(self._nettverk)
-        return self._nettverk
-
-    
-    # sørg for at kostnad er enten "minutter", "meter" eller begge
+    # sørg for at kostnaden funker
     @property
     def kostnad(self):
         return self._kostnad
@@ -169,7 +153,7 @@ class Graf(Nettverk):
         return self._kostnad
     
     
-    # disse skal ikke være lov å endre
+    # disse skal det ikke være lov å endre
     @property
     def aar(self):
         return self._aar
@@ -191,7 +175,9 @@ class Graf(Nettverk):
     
 
 
+
 def main():
+    """ testing """
     
     import numpy as np
 
@@ -232,7 +218,7 @@ def main():
     G.kostnad = ["minutter", "meter"]
     print(G)
     
-    print(G.od_cost_matrix(punkter.sample(1), punkter, id_kolonne=True, linjer=True, cutoff=60, destination_count=10).sample(1))
+    print(G.od_cost_matrix(punkter.sample(1), punkter, id_kolonne="idx", linjer=True, cutoff=60, destination_count=10).sample(1))
     
     print(G.nettverk.isolert.value_counts())
     print(G.nettverk.sperring.value_counts())
@@ -244,6 +230,8 @@ def main():
     
     G.nettverk = G.nettverk[G.nettverk.category != "S"]
     
+    G.kostnad = "minutter"
+
     print(G.shortest_path(punkter.sample(1), punkter.sample(5)).head(1))
     print(G.service_area(punkter.sample(1), 10).head(1))
     
