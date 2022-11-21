@@ -2,7 +2,7 @@ import numpy as np
 import pandas as pd
 import geopandas as gpd
 import pygeos
-from networkz.stottefunksjoner import fjern_tomme_geometrier, gdf_concat, les_geoparquet, kutt_linjer
+from networkz.stottefunksjoner import fjern_tomme_geometrier, gdf_concat, kutt_linjer
        
 
 # funksjon som tilpasser vegnettet til funksjonen graf(), som bygger grafen.
@@ -15,7 +15,6 @@ def lag_nettverk(veger,
                  vegkategori: str = "category",
                  kommunekolonne = "municipality",
                  isolerte_nettverk = True,
-                 sperring = None,
                  turn_restrictions = None):
     
     veger_kopi = veger.copy()
@@ -26,29 +25,28 @@ def lag_nettverk(veger,
     veger_kopi.columns = [col.lower() for col in veger_kopi.columns]
 
     # finn kolonner
-    source = finn_source(veger, source)
-    target = finn_target(veger, target)
-    linkid = finn_linkid(veger, linkid)
-    drivetime_fw, drivetime_bw = finn_minutter(veger, minutter)
-    finn_vegkategori(veger, vegkategori)   
-    veger["KOMMUNENR"] = finn_og_omkod_kommunekolonne(veger)
+    veger_kopi["source"] = finn_source(veger_kopi, source)
+    veger_kopi["target"] = finn_target(veger_kopi, target)
+    veger_kopi["linkid"] = finn_linkid(veger_kopi, linkid)
+    veger_kopi["category"] = finn_vegkategori(veger_kopi, vegkategori)   
+    veger_kopi["KOMMUNENR"] = finn_og_omkod_kommunekolonne(veger_kopi, kommunekolonne)
+    veger_kopi["drivetime_fw"], veger_kopi["drivetime_bw"] = finn_minutter(veger_kopi, minutter)
     
     if not "sperring" in veger_kopi.columns:
         veger_kopi["sperring"] = -1
         
     # litt opprydning (til utm33-koordinater, endre navn på kolonner, beholde kun relevante kolonner, resette index)
     veger_kopi = (veger_kopi
-                    .to_crs(25833)
-                    .rename(columns={source: "source", target: "target", linkid: "linkid"}) 
-                    [["idx", "source", "target", "linkid", drivetime_fw, drivetime_bw, "oneway", "sperring", "category", "KOMMUNENR", "geometry"]]
-                    .reset_index(drop=True) 
-                    )
+                  .to_crs(25833)
+                  [["idx", "source", "target", "linkid", "drivetime_fw", "drivetime_bw", "oneway", "sperring", "category", "KOMMUNENR", "geometry"]]
+                  .reset_index(drop=True) 
+                  )
     
     # fra multilinestring til linestring. Og fjerne z-koordinat fordi de ikke trengs
     veger_kopi = fjern_tomme_geometrier(veger_kopi)
     veger_kopi["geometry"] = pygeos.line_merge(pygeos.force_2d(pygeos.from_shapely(veger_kopi.geometry)))   
-      
-    #hvis noen lenker fortsatt er multilinestrings, må de splittes for å ikke ha flere enn to ytterpunkter 
+    
+    #hvis noen lenker fortsatt er multilinestrings, må de splittes for å ikke ha flere enn to ytterpunkter snart
     n = len(veger_kopi)
     veger_kopi = veger_kopi.explode(ignore_index=True)
     if len(veger_kopi)<n:
@@ -56,21 +54,12 @@ def lag_nettverk(veger,
         #TODO: lag ny minutt-kolonne manuelt
     
     if isolerte_nettverk:
-        veger_kopi = finn_isolerte_nettverk(veger_kopi, storrelse=5)
+        veger_kopi = finn_isolerte_nettverk(veger_kopi, 
+                                            storrelse=10000, 
+                                            ruteloop=2250)
     else:
         veger_kopi["isolert"] = np.nan
-    
-    #midlr.
-    if sperring:
-        while np.max(veger_kopi.length) > 1001:
-            veger_kopi = kutt_linjer(veger_kopi, 1000)
-        while np.max(veger_kopi.length) > 301:
-            veger_kopi = kutt_linjer(veger_kopi, 300)
-        while np.max(veger_kopi.length) > 101:
-            veger_kopi = kutt_linjer(veger_kopi, 100)
-        while np.max(veger_kopi.length) > 51:
-            veger_kopi = kutt_linjer(veger_kopi, 50)
-    
+        
     # hent ut linjenes ytterpunkter. 
     # men først: sirkler har ingen ytterpunkter og heller ingen funksjon. Disse må fjernes
     ytterpunkter = veger_kopi.copy()
@@ -94,17 +83,17 @@ def lag_nettverk(veger,
     begge_retninger2 = begge_retninger2.rename(columns={"source": "target", "target": "source", "source_wkt": "target_wkt", "target_wkt": "source_wkt"})
     
     # lag minutt-kolonne
-    begge_retninger1["minutter_bil"] = begge_retninger1[drivetime_fw]
-    begge_retninger2["minutter_bil"] = begge_retninger2[drivetime_bw]
-    ft["minutter_bil"] = ft[drivetime_fw]
-    tf["minutter_bil"] = tf[drivetime_bw]
+    begge_retninger1["minutter"] = begge_retninger1["drivetime_fw"]
+    begge_retninger2["minutter"] = begge_retninger2["drivetime_bw"]
+    ft["minutter"] = ft["drivetime_fw"]
+    tf["minutter"] = tf["drivetime_bw"]
 
     n = veger_kopi[(veger_kopi.oneway=="N")]
     if len(n)>0:
-        n["minutter_bil"] = np.where((n[drivetime_fw].isna()) | (n[drivetime_fw]==0) | (n[drivetime_fw]==""),
-                                     n[drivetime_bw],
-                                     n[drivetime_fw])
-        n2 = n.copy().rename(columns={"source": "target", "target": "source", "source_wkt": "target_wkt", "target_wkt": "source_wkt"})
+        n["minutter"] = np.where((n["drivetime_fw"].isna()) | (n["drivetime_fw"]==0) | (n["drivetime_fw"]==""),
+                                     n["drivetime_bw"],
+                                     n["drivetime_fw"])
+        n2 = n.rename(columns={"source": "target", "target": "source", "source_wkt": "target_wkt", "target_wkt": "source_wkt"})
         veger_edges = gdf_concat([begge_retninger1, begge_retninger2, ft, tf, n, n2])
     else:
         veger_edges = gdf_concat([begge_retninger1, begge_retninger2, ft, tf])
@@ -119,14 +108,25 @@ def lag_nettverk(veger,
         veger_edges["turn_restriction"] = False
 
     # rydd opp (fjern eventuelle 0-verdier, velg ut kolonner, fjern duplikat-lenkene med høyest kostnad, reset index)
-    veger_edges = veger_edges.loc[veger_edges["minutter_bil"] >= 0, 
-                                  ["idx", "source", "target", "source_wkt", "target_wkt", "minutter_bil", "meter", "turn_restriction", "sperring", "category", "isolert", "KOMMUNENR", "geometry"]]
+    veger_edges = veger_edges.loc[veger_edges["minutter"] >= 0, 
+                                  ["idx", "source", "target", "source_wkt", "target_wkt", "minutter", "meter", "turn_restriction", "sperring", vegkategori, "isolert", "KOMMUNENR", "geometry"]]
     
+    """
+    while np.max(veger_edges.length) > 1001:
+        veger_edges = kutt_linjer(veger_edges, 1000)
+    while np.max(veger_edges.length) > 301:
+        veger_edges = kutt_linjer(veger_edges, 300)
+    while np.max(veger_edges.length) > 101:
+        veger_edges = kutt_linjer(veger_edges, 100)
+    while np.max(veger_edges.length) > 51:
+        veger_edges = kutt_linjer(veger_edges, 50)
+    """
+         
     #nye node-id-er som følger index (fordi jeg indexer med numpy arrays i avstand_til_noder())
     veger_edges = make_node_ids(veger_edges)
 
     # category-type for å spare plass
-    for col in ["source", "target", "source_wkt", "target_wkt", "turn_restriction", "category", "KOMMUNENR"]:
+    for col in ["source", "target", "source_wkt", "target_wkt", "turn_restriction", vegkategori, "KOMMUNENR"]:
         veger_edges[col] = veger_edges[col].astype(str).astype("category")
             
     return veger_edges
@@ -135,7 +135,7 @@ def lag_nettverk(veger,
 # looping er treigt, men buffer+dissolve for store områder er mye treigere. 
 # "deler" derfor dataene i ruter ved å gi kolonner koordinat-kategorier
 def koor_kat(gdf, 
-             meter = 2000, # minst mulig ruter er ikke alltid raskest. Varierer med hvor tunge dataene er.
+             meter, # minst mulig ruter er ikke alltid raskest. Varierer med hvor tunge dataene er.
              x2 = False # x2=True gir en kolonne til med ruter 1/2 hakk nedover og bortover. Hvis grensetilfeller er viktig
              ):
     
@@ -166,46 +166,58 @@ def koor_kat(gdf,
     return gdf
 
 
-def finn_isolerte_nettverk(veger, storrelse=5):
+def finn_isolerte_nettverk(veger, storrelse, ruteloop):
     
-    veger = koor_kat(veger, meter = 2000, x2 = True)
+    veger = koor_kat(veger, meter = ruteloop, x2 = True)
 
     if "sperring" in veger.columns:
-        veger2 = veger[veger.sperring.astype(int) != 1]
+        ikke_sperringer = veger[veger.sperring.astype(int) != 1]
         sperringer = veger[veger.sperring.astype(int) == 1]
     else:
-        veger2 = veger.copy()
+        ikke_sperringer = veger.copy()
         sperringer = veger.copy()
         
-    kanskje_isolerte_nettverk = ()
-    for kat in veger2.koor_kat.unique():
-        sperringene = sperringer.loc[sperringer.koor_kat == kat, ["geometry", "idx"]]
-        vegene = veger2.loc[veger2.koor_kat == kat, ["geometry"]]
-        vegene["geometry"] = vegene.buffer(0.001, resolution = 1) # lavest mulig resolution for å få det fort
-        dissolvet = vegene.dissolve()
-        singlepart = dissolvet.explode(ignore_index=True)
-        lite_nettverk = singlepart[singlepart.area < storrelse].unary_union
-        if lite_nettverk is not None:
-            kanskje_isolerte_nettverk = kanskje_isolerte_nettverk + tuple(veger2.loc[veger2.within(lite_nettverk), "idx"])
-            kanskje_isolerte_nettverk = kanskje_isolerte_nettverk + tuple(sperringene.loc[sperringene.intersects(lite_nettverk), "idx"])
-            kanskje_isolerte_nettverk = tuple(set(kanskje_isolerte_nettverk))
-            
-    kanskje_isolerte_nettverk2 = ()
-    for kat in veger2.koor_kat2.unique():
-        sperringene = sperringer.loc[sperringer.koor_kat2 == kat, ["geometry", "idx"]]
-        vegene = veger2.loc[veger2.koor_kat2 == kat, ["geometry"]]
-        vegene["geometry"] = vegene.buffer(0.001, resolution = 1) # lavest mulig resolution for å få det fort
-        dissolvet = vegene.dissolve()
-        singlepart = dissolvet.explode(ignore_index=True)
-        lite_nettverk = singlepart[singlepart.area < storrelse].unary_union
-        if lite_nettverk is not None:
-            kanskje_isolerte_nettverk2 = kanskje_isolerte_nettverk2 + tuple(veger2.loc[veger2.within(lite_nettverk), "idx"])
-            kanskje_isolerte_nettverk2 = kanskje_isolerte_nettverk2 + tuple(sperringene.loc[sperringene.intersects(lite_nettverk), "idx"])
-            kanskje_isolerte_nettverk2 = tuple(set(kanskje_isolerte_nettverk2))
+    def kat_loop(veger, sperringer, kolonne):
+        kanskje_isolerte = ()
+        storrelsene = ()
+        for kat in veger[kolonne].unique():
+            sperringene = sperringer.loc[sperringer[kolonne] == kat, ["geometry", "idx"]]
+            vegene = veger.loc[veger[kolonne] == kat, ["geometry"]]
+            vegene["geometry"] = vegene.buffer(0.001, resolution = 1) # lavest mulig resolution for å få det fort
+            dissolvet = vegene.dissolve()
+            sum_lengde = dissolvet.length.sum()
+            singlepart = dissolvet.explode(ignore_index=True)
+            singlepart["utstrekning"] = singlepart.convex_hull.area
+            lite_nettverk = singlepart[(singlepart.length < storrelse*2) & 
+                                       (singlepart.length < sum_lengde*0.5) &
+                                       (singlepart["utstrekning"] < sum_lengde)
+                                       ] #.unary_union
+            for geom in lite_nettverk.geometry:
+                nye_kanskje_isolerte =  tuple(veger.loc[veger.within(geom), "idx"]) + tuple(sperringene.loc[sperringene.intersects(geom), "idx"])
+                nye_kanskje_isolerte = tuple(x for x in nye_kanskje_isolerte if x not in kanskje_isolerte)
+                kanskje_isolerte = kanskje_isolerte + nye_kanskje_isolerte
+                storrelsene = storrelsene + tuple(geom.length for _ in range(len(nye_kanskje_isolerte)))
+        return kanskje_isolerte, storrelsene
+       
+    kanskje_isolerte, storrelsene = kat_loop(ikke_sperringer, sperringer, "koor_kat")
+    kanskje_isolerte2, storrelsene2 = kat_loop(ikke_sperringer, sperringer, "koor_kat2")
     
-    isolerte_nettverk = [x for x in kanskje_isolerte_nettverk if x in kanskje_isolerte_nettverk2]
-    
-    veger.loc[veger.idx.isin(isolerte_nettverk), "isolert"] = 1
+#    isolerte_nettverk = [x for x in kanskje_isolerte if x in kanskje_isolerte2]
+
+    # dict med id-er og lengder
+    kanskje_isolerte = {x: lengde for x, lengde in zip(kanskje_isolerte, storrelsene) }
+
+    # behold bare id-ene som er små nettverk i begge rutelooper. Og velg maks. lengde for hver id
+    isolerte_nettverk = {i: max([lengde, kanskje_isolerte[i]]) 
+                        for i, lengde in  zip(kanskje_isolerte2, storrelsene2)
+                        if i in kanskje_isolerte}
+
+                
+#    veger.loc[veger.idx.isin(isolerte_nettverk), "isolert"] = 1
+
+    # lag kolonne med lengden for id-ene som er isolerte. Ellers blir isolert 0
+    veger.loc[veger.idx.isin(isolerte_nettverk), "isolert"] = [isolerte_nettverk[x] for x in veger.loc[veger.idx.isin(isolerte_nettverk), "idx"] ]
+
     veger.loc[~veger.idx.isin(isolerte_nettverk), "isolert"] = 0
     
     return veger
@@ -241,12 +253,12 @@ def turn_restr(veger, turn_restrictions):
     # gjør lenkene med restrictions til første del av nye dobbellenker som skal lages
     lenker_med_restriction = (lenker_med_restriction
                               .drop("edge1fid", axis=1, errors="ignore")
-                              .rename(columns={"target": "middlenode", "minutter_bil": "minutter1", "meter": "meter1", "geometry": "geom1", "idx": "edge1fid"}) 
+                              .rename(columns={"target": "middlenode", "minutter": "minutter1", "meter": "meter1", "geometry": "geom1", "idx": "edge1fid"}) 
                               .loc[:, ["source", "source_wkt", "middlenode", "minutter1", "meter1", "geom1", "edge1fid"]] )
     # klargjør tabell som skal bli andre del av dobbellenkene
     restrictions = (veger_edges
             .copy()
-            .rename(columns={"source": "middlenode", "minutter_bil": "minutter2", "meter": "meter2", "geometry": "geom2", "idx": "edge2fid"})
+            .rename(columns={"source": "middlenode", "minutter": "minutter2", "meter": "meter2", "geometry": "geom2", "idx": "edge2fid"})
             .loc[:, ["middlenode","target", "target_wkt", "minutter2", "meter2", "geom2", "edge2fid"]] )
 
     # koble basert på den nye kolonnen 'middlenode', som blir midterste node i dobbellenkene
@@ -267,7 +279,7 @@ def turn_restr(veger, turn_restrictions):
                                 (fra_noder_med_restriction["target"].isin(turn_restrictions["totonode"])))]
     
     # smelt lenkeparene sammen
-    dobbellenker["minutter_bil"] = dobbellenker["minutter1"] + dobbellenker["minutter2"]
+    dobbellenker["minutter"] = dobbellenker["minutter1"] + dobbellenker["minutter2"]
     dobbellenker["meter"] = dobbellenker["meter1"] + dobbellenker["meter2"]
     dobbellenker["geometry"] = pygeos.line_merge(pygeos.union(pygeos.from_shapely(dobbellenker.geom1), pygeos.from_shapely(dobbellenker.geom2)))
     dobbellenker = gpd.GeoDataFrame(dobbellenker, geometry = "geometry", crs = 25833)
@@ -329,10 +341,6 @@ def network_from_geometry(veger,
 # nye node-id-er som følger index (fordi jeg indexer med numpy arrays i avstand_til_noder())
 def make_node_ids(veger_kopi):
 
-#    while np.max(veger_kopi.length)>50:
- #       veger_kopi = kutt_linjer(veger_kopi, 50)
-  #      print(np.max(veger_kopi.length))
-    
     sources = veger_kopi[["source_wkt"]].rename(columns={"source_wkt":"wkt"})  
     targets = veger_kopi[["target_wkt"]].rename(columns={"target_wkt":"wkt"})
     noder = (pd.concat([sources, targets], axis=0, ignore_index=True)
@@ -381,7 +389,7 @@ def finn_source(veger, source):
             veger[source] = np.nan
         elif n > 1:
             raise ValueError("Flere kolonner kan inneholde source-id-er")
-    return source
+    return veger[source]
 
 
 def finn_target(veger, target):
@@ -397,7 +405,7 @@ def finn_target(veger, target):
             veger[target] = np.nan
         elif n > 1:
             raise ValueError("Flere kolonner kan inneholde target-id-er")
-    return target
+    return veger[target]
 
 
 def finn_linkid(veger, linkid):
@@ -413,32 +421,32 @@ def finn_linkid(veger, linkid):
             veger[linkid] = np.nan #godta dette eller raise ValueError("Finner ikke linkid-kolonne") ?
         elif n > 1:
             raise ValueError("Flere kolonner kan inneholde linkid-id-er")
-    return linkid
+    return veger[linkid]
 
 
-def finn_minutter(veger, minutter):
+def finn_minutter(veger, minutter) -> tuple:
     if isinstance(minutter, str) and minutter in veger.columns:
-        return minutter, minutter
-    if minutter[0] in veger.columns and minutter[1] in veger.columns:
-        drivetime_fw, drivetime_bw = "drivetime_fw", "drivetime_bw"            
+        return veger[minutter], veger[minutter]
+    elif minutter[0] in veger.columns and minutter[1] in veger.columns:
+        return veger[minutter[0]], veger[minutter[1]]
     elif "drivetime_fw" in veger.columns and "drivetime_bw" in veger.columns:
-        drivetime_fw, drivetime_bw = "drivetime_fw", "drivetime_bw"
+        return veger["drivetime_fw"], veger["drivetime_bw"]
     elif "ft_minutes" in veger.columns and "tf_minutes" in veger.columns:
-        drivetime_fw, drivetime_bw = "ft_minutes", "tf_minutes"
+        return veger["ft_minutes"], veger["tf_minutes"]
     else:
         raise ValueError("Finner ikke kolonner med minutter")
-    return drivetime_fw, drivetime_bw
 
 
 def finn_vegkategori(veger, vegkategori):
     if vegkategori in veger.columns:
-        pass
+        return veger[vegkategori]
     elif "category" in veger.columns:
-        pass
+        return veger["category"]
     elif "vegtype" in veger.columns:
-        veger = veger.rename(columns={"vegtype": "category"})
+        return veger["vegtype"]
     elif "roadid" in veger.columns:
         veger["category"] = veger["roadid"].map(lambda x: x.replace('{','').replace('}','')[0])
+        return veger["category"] 
     else:
         raise ValueError("Finner ikke vegkategori-kolonne")
 
