@@ -7,7 +7,6 @@ from networkz.lag_igraph import lag_graf
 
 
 def service_area(G,
-                 nettverk,
                  startpunkter: gpd.GeoDataFrame,
                  kostnad,
                  id_kolonne = None, # hvis ikke id-kolonne oppgis, brukes startpunktenes geometri som id
@@ -21,7 +20,7 @@ def service_area(G,
     
     startpunkter = lag_midlr_id(G.noder, startpunkter)
 
-    G2, startpunkter = lag_graf(G, nettverk, G.kostnad, startpunkter)
+    G2, startpunkter = lag_graf(G, G.kostnad, startpunkter)
 
     if isinstance(kostnad, int) or isinstance(kostnad, str):
         kostnad = [kostnad]
@@ -45,8 +44,8 @@ def service_area(G,
                 continue
             
             # velg ut vegene som er i dataframen vi nettopp lagde. Og dissolve til én rad.
-            sa = (nettverk
-                .loc[nettverk.target.isin(df.name), ["geometry"]]
+            sa = (G.nettverk
+                .loc[G.nettverk.target.isin(df.name), ["geometry"]]
                 .dissolve()
                 .reset_index(drop=True)
             )

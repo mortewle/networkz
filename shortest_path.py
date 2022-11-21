@@ -8,7 +8,6 @@ from shapely.geometry import LineString
 
 
 def shortest_path(G,
-                  nettverk,
                     startpunkter: gpd.GeoDataFrame, 
                     sluttpunkter: gpd.GeoDataFrame,
                     id_kolonne = None,
@@ -27,7 +26,6 @@ def shortest_path(G,
     startpunkter, sluttpunkter = lag_midlr_id(G.noder, startpunkter, sluttpunkter)
     
     G2, startpunkter, sluttpunkter = lag_graf(G,
-                                              nettverk,
                                               G.kostnad,
                                               startpunkter, 
                                               sluttpunkter)
@@ -53,7 +51,7 @@ def shortest_path(G,
             
             path = G2.vs[res[0]]["name"]
             
-            linje = nettverk.loc[(nettverk.source.isin(path)) & (nettverk.target.isin(path)), ["geometry"]]
+            linje = G.nettverk.loc[(G.nettverk.source.isin(path)) & (G.nettverk.target.isin(path)), ["geometry"]]
             
             linje = linje.dissolve()
             

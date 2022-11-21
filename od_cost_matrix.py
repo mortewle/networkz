@@ -8,7 +8,6 @@ from networkz.lag_igraph import lag_graf, m_til_min, m_til_treige_min
 
 
 def od_cost_matrix(G,
-                   nettverk,
                     startpunkter: gpd.GeoDataFrame, 
                     sluttpunkter: gpd.GeoDataFrame,
                     id_kolonne = None,
@@ -17,18 +16,27 @@ def od_cost_matrix(G,
                     cutoff: int = None,
                     destination_count: int = None,
                     ):
-    
+        
     startpunkter = startpunkter.copy().to_crs(25833)
     sluttpunkter = sluttpunkter.copy().to_crs(25833)
 
-    id_kolonner = bestem_ids(id_kolonne, startpunkter, sluttpunkter)
+    id_kolonner = bestem_ids(id_kolonne, 
+                             startpunkter, 
+                             sluttpunkter)
 
-    startpunkter, sluttpunkter = lag_midlr_id(G.noder, startpunkter, sluttpunkter)
-     
-    def kjor_od_cost(G, nettverk, kostnad, startpunkter, sluttpunkter, radvis):
-        
+    startpunkter, sluttpunkter = lag_midlr_id(G.noder, 
+                                              startpunkter, 
+                                              sluttpunkter)
+    
+    # så loop beregningen for hver kostnad.
+    kostnader = G.kostnad
+    if isinstance(kostnader, str):
+         kostnader = [kostnader]
+
+    out = [] 
+    for kostnad in kostnader:
+                
         G2, startpunkter, sluttpunkter = lag_graf(G,
-                                                  nettverk,
                                                   kostnad,
                                                   startpunkter, 
                                                   sluttpunkter)
@@ -75,21 +83,15 @@ def od_cost_matrix(G,
         if "minutter" in kostnad and G.kost_til_nodene:
             df[kostnad] = df[kostnad] - m_til_treige_min(df["dist_node_start"], G.kjoretoy) - m_til_treige_min(df["dist_node_slutt"], G.kjoretoy)
             df[kostnad] = df[kostnad] + m_til_min(df["dist_node_start"], G.kjoretoy) + m_til_min(df["dist_node_slutt"], G.kjoretoy)        
+            
+        out.append(df)
         
-        return df
-        
-    # kjør funksjonen én eller to ganger avhengig av hvor mange kostnader man har
-    if isinstance(G.kostnad, str): 
-        out = kjor_od_cost(G, nettverk, G.kostnad, startpunkter, sluttpunkter, radvis)
-        
-    else:
-        if len(G.kostnad)==2:
-            df = kjor_od_cost(G, nettverk, G.kostnad[0], startpunkter, sluttpunkter, radvis)
-            df2 = kjor_od_cost(G, nettverk, G.kostnad[1], startpunkter, sluttpunkter, radvis)
-            out = df.merge(df2[["fra", "til", G.kostnad[1]]], on = ["fra", "til"], how="outer")
-        else:
-            raise ValueError("Kan bare beregne 'meter' og 'minutter'")
+    for df1, df2 in zip(out[:-1], out[1:]):
+        out = df1.merge(df2, on = ["fra", "til"])
 
+    if isinstance(out, list):
+        out = pd.concat(out, axis=0, ignore_index=True)
+    
     # fjern rutene som går fra og til samme punkt
     wkt_dict_start = {idd: geom.wkt for idd, geom in zip(startpunkter["nz_idx"], startpunkter.geometry)}
     wkt_dict_slutt = {idd: geom.wkt for idd, geom in zip(sluttpunkter["nz_idx"], sluttpunkter.geometry)}
