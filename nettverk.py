@@ -1,12 +1,12 @@
 import numpy as np
 import pandas as pd
 import geopandas as gpd
-import pygeos
-from networkz.stottefunksjoner import fjern_tomme_geometrier, gdf_concat, kutt_linjer
+import pygeos #shapely
+from networkz.stottefunksjoner import fjern_tomme_geometrier, gdf_concat
        
 
-# funksjon som tilpasser vegnettet til funksjonen graf(), som bygger grafen.
-# outputen her kan lagres i parquet så man slipper å lage nettverket hver gang.
+# funksjon som tilpasser vegnettet til classen Graf().
+# outputen her bør lagres så man slipper å lage nettverket hver gang.
 def lag_nettverk(veger,
                  source: str = "fromnodeid",
                  target: str = "tonodeid",
@@ -44,6 +44,7 @@ def lag_nettverk(veger,
     
     # fra multilinestring til linestring. Og fjerne z-koordinat fordi de ikke trengs
     veger_kopi = fjern_tomme_geometrier(veger_kopi)
+#    veger_kopi["geometry"] = shapely.line_merge(shapely.force_2d(veger_kopi.geometry)) 
     veger_kopi["geometry"] = pygeos.line_merge(pygeos.force_2d(pygeos.from_shapely(veger_kopi.geometry)))   
     
     #hvis noen lenker fortsatt er multilinestrings, må de splittes for å ikke ha flere enn to ytterpunkter snart
@@ -102,7 +103,7 @@ def lag_nettverk(veger,
     veger_edges["meter"] = veger_edges.length
     
     # TODO: fullfør denne
-    if turn_restrictions is not None:
+    if turn_restrictions:
         veger_edges = turn_restr(veger_edges, turn_restrictions)
     else:
         veger_edges["turn_restriction"] = False
@@ -139,7 +140,7 @@ def koor_kat(gdf,
              x2 = False # x2=True gir en kolonne til med ruter 1/2 hakk nedover og bortover. Hvis grensetilfeller er viktig
              ):
     
-    # rund ned
+    # rund ned koordinatene og sett sammen til kolonne
     gdf["koor_kat"] = round(gdf.geometry.bounds.minx/meter,1).astype(int).astype(str) + "_" + round(gdf.geometry.bounds.miny/meter,1).astype(int).astype(str)
     
     if x2:
@@ -191,7 +192,7 @@ def finn_isolerte_nettverk(veger, storrelse, ruteloop):
             lite_nettverk = singlepart[(singlepart.length < storrelse*2) & 
                                        (singlepart.length < sum_lengde*0.5) &
                                        (singlepart["utstrekning"] < sum_lengde)
-                                       ] #.unary_union
+                                       ]
             for geom in lite_nettverk.geometry:
                 nye_kanskje_isolerte =  tuple(veger.loc[veger.within(geom), "idx"]) + tuple(sperringene.loc[sperringene.intersects(geom), "idx"])
                 nye_kanskje_isolerte = tuple(x for x in nye_kanskje_isolerte if x not in kanskje_isolerte)
@@ -202,8 +203,6 @@ def finn_isolerte_nettverk(veger, storrelse, ruteloop):
     kanskje_isolerte, storrelsene = kat_loop(ikke_sperringer, sperringer, "koor_kat")
     kanskje_isolerte2, storrelsene2 = kat_loop(ikke_sperringer, sperringer, "koor_kat2")
     
-#    isolerte_nettverk = [x for x in kanskje_isolerte if x in kanskje_isolerte2]
-
     # dict med id-er og lengder
     kanskje_isolerte = {x: lengde for x, lengde in zip(kanskje_isolerte, storrelsene) }
 
@@ -211,9 +210,6 @@ def finn_isolerte_nettverk(veger, storrelse, ruteloop):
     isolerte_nettverk = {i: max([lengde, kanskje_isolerte[i]]) 
                         for i, lengde in  zip(kanskje_isolerte2, storrelsene2)
                         if i in kanskje_isolerte}
-
-                
-#    veger.loc[veger.idx.isin(isolerte_nettverk), "isolert"] = 1
 
     # lag kolonne med lengden for id-ene som er isolerte. Ellers blir isolert 0
     veger.loc[veger.idx.isin(isolerte_nettverk), "isolert"] = [isolerte_nettverk[x] for x in veger.loc[veger.idx.isin(isolerte_nettverk), "idx"] ]
@@ -281,6 +277,7 @@ def turn_restr(veger, turn_restrictions):
     # smelt lenkeparene sammen
     dobbellenker["minutter"] = dobbellenker["minutter1"] + dobbellenker["minutter2"]
     dobbellenker["meter"] = dobbellenker["meter1"] + dobbellenker["meter2"]
+#    dobbellenker["geometry"] = shapely.line_merge(shapely.union(dobbellenker.geom1, dobbellenker.geom2))
     dobbellenker["geometry"] = pygeos.line_merge(pygeos.union(pygeos.from_shapely(dobbellenker.geom1), pygeos.from_shapely(dobbellenker.geom2)))
     dobbellenker = gpd.GeoDataFrame(dobbellenker, geometry = "geometry", crs = 25833)
     dobbellenker["turn_restriction"] = True
@@ -303,10 +300,11 @@ def network_from_geometry(veger,
     
     veger_kopi = veger_kopi.to_crs(25833)
     veger_kopi = fjern_tomme_geometrier(veger_kopi)
+#    veger_kopi["geometry"] = shapely.line_merge(shapely.force_2d(veger_kopi.geometry)) 
     veger_kopi["geometry"] = pygeos.line_merge(pygeos.force_2d(pygeos.from_shapely(veger_kopi.geometry)))   
     n = len(veger_kopi)
     veger_kopi = veger_kopi.explode(ignore_index=True)
-    if len(veger_kopi)<n and minute_col is not None:
+    if len(veger_kopi)<n and minute_col:
         print(f"Advarsel: {len(veger_kopi)-n} multigeometrier ble splittet. Minutt-kostnader blir feil for disse.")
         #TODO: lag ny minutt-kolonne manuelt her
     
@@ -338,8 +336,8 @@ def network_from_geometry(veger,
     return veger_kopi
 
 
-# nye node-id-er som følger index (fordi jeg indexer med numpy arrays i avstand_til_noder())
 def make_node_ids(veger_kopi):
+    """ Nye node-id-er som følger index (fordi jeg indexer med numpy arrays i avstand_til_noder()) """
 
     sources = veger_kopi[["source_wkt"]].rename(columns={"source_wkt":"wkt"})  
     targets = veger_kopi[["target_wkt"]].rename(columns={"target_wkt":"wkt"})
