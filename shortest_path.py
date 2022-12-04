@@ -1,8 +1,9 @@
 import geopandas as gpd
 import pandas as pd
 import numpy as np
-from networkz.stottefunksjoner import gdf_concat, bestem_ids, lag_midlr_id, map_ids
-from networkz.lag_igraph import lag_graf, m_til_min, m_til_treige_min
+from networkz.hjelpefunksjoner import gdf_concat
+from networkz.id_greier import bestem_ids, lag_midlr_id, map_ids
+from networkz.lag_igraph import lag_graf
 from shapely.geometry import LineString
 
 
@@ -23,7 +24,7 @@ def shortest_path(G,
 
     id_kolonner = bestem_ids(id_kolonne, startpunkter, sluttpunkter)
 
-    startpunkter, sluttpunkter = lag_midlr_id(G.noder, startpunkter, sluttpunkter)
+    startpunkter["nz_idx"], sluttpunkter["nz_idx"] = lag_midlr_id(G.noder, startpunkter, sluttpunkter)
     
     G2, startpunkter, sluttpunkter = lag_graf(G,
                                               G.kostnad,
@@ -78,16 +79,12 @@ def shortest_path(G,
 
     linjer = map_ids(linjer, id_kolonner, startpunkter, sluttpunkter)
 
-    if cutoff is not None:
+    if cutoff:
         linjer = linjer[linjer[G.kostnad] < cutoff]
         
-    if destination_count is not None:
+    if destination_count:
         linjer = linjer.loc[linjer.groupby('fra')[G.kostnad].idxmin()].reset_index(drop=True)
         
-    if G.kostnad=="minutter" and G.kost_til_nodene is True:
-        linjer[G.kostnad] = linjer[G.kostnad] - m_til_treige_min(linjer["dist_node_start"], G.kjoretoy) - m_til_treige_min(linjer["dist_node_slutt"], G.kjoretoy)
-        linjer[G.kostnad] = linjer[G.kostnad] + m_til_min(linjer["dist_node_start"], G.kjoretoy) + m_til_min(linjer["dist_node_slutt"], G.kjoretoy)
-    
     linjer = linjer[["fra", "til", G.kostnad, "geometry"]]
     
     return linjer
