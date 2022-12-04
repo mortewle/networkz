@@ -2,7 +2,8 @@ import geopandas as gpd
 import pandas as pd
 import numpy as np
 from shapely.geometry import LineString
-from networkz.stottefunksjoner import gdf_concat, bestem_ids, lag_midlr_id, map_ids
+from networkz.hjelpefunksjoner import gdf_concat
+from networkz.id_greier import bestem_ids, lag_midlr_id, map_ids
 from networkz.lag_igraph import lag_graf
 
 
