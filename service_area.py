@@ -8,7 +8,7 @@ from networkz.lag_igraph import lag_graf
 
 def service_area(G,
                  startpunkter: gpd.GeoDataFrame,
-                 kostnad,
+                 impedance,
                  id_kolonne = None, # hvis ikke id-kolonne oppgis, brukes startpunktenes geometri som id
                  ):
         
@@ -18,17 +18,17 @@ def service_area(G,
     if id_kolonne is None:
         id_kolonne = "fra"
     
-    startpunkter = lag_midlr_id(G.noder, startpunkter)
+    startpunkter["nz_idx"] = lag_midlr_id(G.noder, startpunkter)
 
     G2, startpunkter = lag_graf(G, G.kostnad, startpunkter)
 
-    if isinstance(kostnad, int) or isinstance(kostnad, str):
-        kostnad = [kostnad]
+    if isinstance(impedance, int) or isinstance(impedance, str):
+        impedance = [impedance]
         
     # loop for hver kostnad og hvert startpunkt
     alle_service_areas = []   
     for i in startpunkter["nz_idx"]:
-        for kost in kostnad:
+        for imp in impedance:
 
             startpunkt = startpunkter[startpunkter["nz_idx"]==i]
             
@@ -37,10 +37,11 @@ def service_area(G,
 
             # lag tabell av resultatene og fjern alt over ønsket kostnad
             df = pd.DataFrame(data={"name": np.array(G2.vs["name"]), G.kostnad: resultat[0]})
-            df = df[df[G.kostnad] < kost]
+            df = df[df[G.kostnad] < imp]
 
             if len(df) == 0:
-                alle_service_areas.append(gpd.GeoDataFrame(pd.DataFrame({id_kolonne: [i], G.kostnad: kost, "geometry": LineString()}), geometry="geometry", crs=25833))
+                alle_service_areas.append(gpd.GeoDataFrame(pd.DataFrame({id_kolonne: [i], G.kostnad: imp, "geometry": LineString()}), 
+                                                           geometry="geometry", crs=25833))
                 continue
             
             # velg ut vegene som er i dataframen vi nettopp lagde. Og dissolve til én rad.
@@ -51,7 +52,7 @@ def service_area(G,
             )
             # lag kolonner for id, kostnad og evt. node-info
             sa[id_kolonne] = i
-            sa[G.kostnad] = kost
+            sa[G.kostnad] = imp
             alle_service_areas.append(sa)
 
     alle_service_areas = gdf_concat(alle_service_areas)
