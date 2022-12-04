@@ -2,29 +2,31 @@ import numpy as np
 import pandas as pd
 import geopandas as gpd
 import pygeos #shapely
-from networkz.stottefunksjoner import fjern_tomme_geometrier, gdf_concat
-       
+from networkz.hjelpefunksjoner import fjern_tomme_geometrier, gdf_concat
+from sklearn.neighbors import NearestNeighbors
+  
 
 # funksjon som tilpasser vegnettet til classen Graf().
-# outputen her bør lagres så man slipper å lage nettverket hver gang.
 def lag_nettverk(veger,
+                 directed = True,
                  source: str = "fromnodeid",
                  target: str = "tonodeid",
                  linkid: str = "linkid",
                  minutter = ("drivetime_fw", "drivetime_bw"),
                  vegkategori: str = "category",
                  kommunekolonne = "municipality",
-                 isolerte_nettverk = True,
+                 finn_isolerte = True,
+                 utvid: int = None, # meter
                  turn_restrictions = None):
     
     veger_kopi = veger.copy()
     
     veger_kopi["idx"] = veger_kopi.index
 
-    # endre til små bokstaver
     veger_kopi.columns = [col.lower() for col in veger_kopi.columns]
-
-    # finn kolonner
+    
+    # hvis ikke angitte kolonner finnes i vegdataene, sjekk om andre kolonner matcher. 
+    # lager ny kolonne hvis ingen matcher. Gir feilmelding hvis flere enn én matcher.
     veger_kopi["source"] = finn_source(veger_kopi, source)
     veger_kopi["target"] = finn_target(veger_kopi, target)
     veger_kopi["linkid"] = finn_linkid(veger_kopi, linkid)
@@ -32,14 +34,16 @@ def lag_nettverk(veger,
     veger_kopi["KOMMUNENR"] = finn_og_omkod_kommunekolonne(veger_kopi, kommunekolonne)
     veger_kopi["drivetime_fw"], veger_kopi["drivetime_bw"] = finn_minutter(veger_kopi, minutter)
     
+    if not "oneway" in veger_kopi.columns:
+        veger_kopi["oneway"] = np.nan
     if not "sperring" in veger_kopi.columns:
         veger_kopi["sperring"] = -1
-        
+    
     # litt opprydning (til utm33-koordinater, endre navn på kolonner, beholde kun relevante kolonner, resette index)
     veger_kopi = (veger_kopi
                   .to_crs(25833)
                   [["idx", "source", "target", "linkid", "drivetime_fw", "drivetime_bw", "oneway", "sperring", "category", "KOMMUNENR", "geometry"]]
-                  .reset_index(drop=True) 
+                  .reset_index(drop=True)
                   )
     
     # fra multilinestring til linestring. Og fjerne z-koordinat fordi de ikke trengs
@@ -47,6 +51,8 @@ def lag_nettverk(veger,
 #    veger_kopi["geometry"] = shapely.line_merge(shapely.force_2d(veger_kopi.geometry)) 
     veger_kopi["geometry"] = pygeos.line_merge(pygeos.force_2d(pygeos.from_shapely(veger_kopi.geometry)))   
     
+    assert len(veger_kopi)>0
+
     #hvis noen lenker fortsatt er multilinestrings, må de splittes for å ikke ha flere enn to ytterpunkter snart
     n = len(veger_kopi)
     veger_kopi = veger_kopi.explode(ignore_index=True)
@@ -54,13 +60,13 @@ def lag_nettverk(veger,
         print(f"Advarsel: {len(veger_kopi)-n} multigeometrier ble splittet. Minutt-kostnader blir feil for disse.")
         #TODO: lag ny minutt-kolonne manuelt
     
-    if isolerte_nettverk:
+    if finn_isolerte:
         veger_kopi = finn_isolerte_nettverk(veger_kopi, 
-                                            storrelse=10000, 
+                                            storrelse=10000,
                                             ruteloop=2250)
     else:
         veger_kopi["isolert"] = np.nan
-        
+    
     # hent ut linjenes ytterpunkter. 
     # men først: sirkler har ingen ytterpunkter og heller ingen funksjon. Disse må fjernes
     ytterpunkter = veger_kopi.copy()
@@ -68,50 +74,8 @@ def lag_nettverk(veger,
     sirkler = ytterpunkter.loc[ytterpunkter.is_empty, "idx"] #sirkler har tom boundary
     veger_kopi = veger_kopi[~veger_kopi.idx.isin(sirkler)]
     
-    # lag kolonner med geometritekst (wkt) for source og target
-    ytterpunkter = veger_kopi.geometry.boundary.explode(ignore_index=True) # boundary gir multipunkt med to ytterpunkter for hver linje, og explode() (til singlepart) gir en dobbelt så lang tabell med enkeltpunkter
-    wkt_geom = [f"POINT ({x} {y})" for x, y in zip(ytterpunkter.x, ytterpunkter.y)]
-    veger_kopi["source_wkt"], veger_kopi["target_wkt"] = wkt_geom[0::2], wkt_geom[1::2] # gjør annenhvert ytterpunkt til source_wkt og target_wkt
+    assert len(veger_kopi)>0
 
-    #velg ut de enveiskjørte og snu source og target for lenkene som går "feil" vei
-    ft = veger_kopi[(veger_kopi.oneway=="FT") | (veger_kopi.oneway=="F")] 
-    tf = veger_kopi[(veger_kopi.oneway=="TF") | (veger_kopi.oneway=="T")]
-    tf = tf.rename(columns={"source": "target", "target": "source", "source_wkt": "target_wkt", "target_wkt": "source_wkt"})       
-    
-    #dupliser lenkene som går begge veier og snu source og target i den ene
-    begge_retninger1 = veger_kopi[veger_kopi.oneway=="B"]
-    begge_retninger2 = begge_retninger1.copy()
-    begge_retninger2 = begge_retninger2.rename(columns={"source": "target", "target": "source", "source_wkt": "target_wkt", "target_wkt": "source_wkt"})
-    
-    # lag minutt-kolonne
-    begge_retninger1["minutter"] = begge_retninger1["drivetime_fw"]
-    begge_retninger2["minutter"] = begge_retninger2["drivetime_bw"]
-    ft["minutter"] = ft["drivetime_fw"]
-    tf["minutter"] = tf["drivetime_bw"]
-
-    n = veger_kopi[(veger_kopi.oneway=="N")]
-    if len(n)>0:
-        n["minutter"] = np.where((n["drivetime_fw"].isna()) | (n["drivetime_fw"]==0) | (n["drivetime_fw"]==""),
-                                     n["drivetime_bw"],
-                                     n["drivetime_fw"])
-        n2 = n.rename(columns={"source": "target", "target": "source", "source_wkt": "target_wkt", "target_wkt": "source_wkt"})
-        veger_edges = gdf_concat([begge_retninger1, begge_retninger2, ft, tf, n, n2])
-    else:
-        veger_edges = gdf_concat([begge_retninger1, begge_retninger2, ft, tf])
-
-    # lag meter-kolonne
-    veger_edges["meter"] = veger_edges.length
-    
-    # TODO: fullfør denne
-    if turn_restrictions:
-        veger_edges = turn_restr(veger_edges, turn_restrictions)
-    else:
-        veger_edges["turn_restriction"] = False
-
-    # rydd opp (fjern eventuelle 0-verdier, velg ut kolonner, fjern duplikat-lenkene med høyest kostnad, reset index)
-    veger_edges = veger_edges.loc[veger_edges["minutter"] >= 0, 
-                                  ["idx", "source", "target", "source_wkt", "target_wkt", "minutter", "meter", "turn_restriction", "sperring", vegkategori, "isolert", "KOMMUNENR", "geometry"]]
-    
     """
     while np.max(veger_edges.length) > 1001:
         veger_edges = kutt_linjer(veger_edges, 1000)
@@ -122,14 +86,78 @@ def lag_nettverk(veger,
     while np.max(veger_edges.length) > 51:
         veger_edges = kutt_linjer(veger_edges, 50)
     """
-         
-    #nye node-id-er som følger index (fordi jeg indexer med numpy arrays i avstand_til_noder())
-    veger_edges = make_node_ids(veger_edges)
+    
+    # lag kolonner med geometritekst (wkt) for source og target
+    ytterpunkter = veger_kopi.geometry.boundary.explode(ignore_index=True) # boundary gir multipunkt med to ytterpunkter for hver linje, og explode() (til singlepart) gir en dobbelt så lang tabell med enkeltpunkter
+    wkt_geom = [f"POINT ({x} {y})" for x, y in zip(ytterpunkter.x, ytterpunkter.y)]
+    veger_kopi["source_wkt"], veger_kopi["target_wkt"] = wkt_geom[0::2], wkt_geom[1::2] # gjør annenhvert ytterpunkt til source_wkt og target_wkt
 
-    # category-type for å spare plass
-    for col in ["source", "target", "source_wkt", "target_wkt", "turn_restriction", vegkategori, "KOMMUNENR"]:
-        veger_edges[col] = veger_edges[col].astype(str).astype("category")
+    if not directed or all(veger_kopi["oneway"].isna()):
+        veger_edges = veger_kopi.copy()
+        veger_edges["minutter"] = np.where(veger_edges["drivetime_fw"].fillna(0) > 0,
+                                           veger_edges["drivetime_fw"], 
+                                           veger_edges["drivetime_bw"]) 
+        assert len(veger_edges)>0
+
+    else:
+        #velg ut de enveiskjørte og snu source og target for lenkene som går "feil" vei
+        ft = veger_kopi.loc[(veger_kopi.oneway=="FT") | (veger_kopi.oneway=="F")] 
+        tf = veger_kopi.loc[(veger_kopi.oneway=="TF") | (veger_kopi.oneway=="T")]
+        tf = tf.rename(columns={"source": "target", "target": "source", "source_wkt": "target_wkt", "target_wkt": "source_wkt"})       
+        
+        #dupliser lenkene som går begge veier og snu source og target i den ene
+        begge_retninger1 = veger_kopi[veger_kopi.oneway=="B"]
+        begge_retninger2 = begge_retninger1.copy()
+        begge_retninger2 = begge_retninger2.rename(columns={"source": "target", "target": "source", "source_wkt": "target_wkt", "target_wkt": "source_wkt"})
+        
+        # lag minutt-kolonne
+        begge_retninger1 = begge_retninger1.rename(columns={"drivetime_fw": "minutter"})
+        begge_retninger2 = begge_retninger2.rename(columns={"drivetime_bw": "minutter"})
+        ft = ft.rename(columns={"drivetime_fw": "minutter"})
+        tf = tf.rename(columns={"drivetime_bw": "minutter"})
+
+        # oneway=="N" er sperringer fram til og med 2021
+        n = veger_kopi[(veger_kopi.oneway=="N")]
+        if len(n)>0:
+            n["minutter"] = np.where((n["drivetime_fw"].isna()) | (n["drivetime_fw"]==0) | (n["drivetime_fw"]==""),
+                                        n["drivetime_bw"],
+                                        n["drivetime_fw"])
+            n2 = n.rename(columns={"source": "target", "target": "source", "source_wkt": "target_wkt", "target_wkt": "source_wkt"})
+            veger_edges = gdf_concat([begge_retninger1, begge_retninger2, ft, tf, n, n2])
+        else:
+            veger_edges = gdf_concat([begge_retninger1, begge_retninger2, ft, tf])
+    
+        assert len(veger_edges)>0
+
+    if turn_restrictions:
+        veger_edges = turn_restr(veger_edges, turn_restrictions)
+    else:
+        veger_edges["turn_restriction"] = np.nan
+    
+    #nye node-id-er som følger index (fordi jeg indexer med numpy arrays i avstand_til_noder())
+    veger_edges, noder = lag_node_ids(veger_edges)
+
+    if utvid:
+        if not isinstance(utvid, (float, int)):
+            raise ValueError("utvid må være et tall (antall meter man vil utvide linjer)")
+        tettede_hull = tett_nettverkshull(noder, veger_edges, utvid)
+        veger_edges = gdf_concat([veger_edges, tettede_hull])
+    
+    veger_edges["meter"] = veger_edges.length
+
+    veger_edges = veger_edges.loc[(veger_edges.minutter > 0) | (veger_edges.minutter.isna()),
+                                  ["source", "target", "minutter", "meter", "turn_restriction", "oneway", "sperring", vegkategori, "isolert", "KOMMUNENR", "source_wkt", "target_wkt", "geometry"]]
+    
+    # fjern kolonner som ikke ble brukt        
+    for col in ["minutter", "turn_restriction", "isolert", vegkategori, "sperring", "KOMMUNENR", "oneway"]:
+        if len(veger_edges[~((veger_edges[col].isna()) | (veger_edges[col]==0.02) | (veger_edges[col]==-1))])==0:
+            veger_edges = veger_edges.drop(col, axis=1)
             
+    # category-type for å spare plass
+    for col in ["source", "target", "source_wkt", "target_wkt", vegkategori, "oneway"]:
+        if col in veger_edges.columns:
+            veger_edges[col] = veger_edges[col].astype(str).astype("category")
+
     return veger_edges
 
 
@@ -218,6 +246,59 @@ def finn_isolerte_nettverk(veger, storrelse, ruteloop):
     
     return veger
     
+    
+def tett_nettverkshull(noder, veger, avstand, crs=25833):
+    """ Lager rette linjer mellom små hull i nettverket."""
+        
+    blindveger = noder[noder["n"] <= 1]
+    blindveger = blindveger.reset_index(drop=True)
+
+    if len(blindveger) <= 1:
+        blindveger["minutter"] = -1
+        return blindveger
+    
+    # koordinater til numpy array
+    blindveger_array = np.array([(x, y) for x, y in zip(blindveger.geometry.x, blindveger.geometry.y)])
+    
+    # finn nærmeste to naboer og velg ut nest nærmeste (nærmeste er fra og til samme punkt)
+    nbr = NearestNeighbors(n_neighbors=2, algorithm='ball_tree').fit(blindveger_array)
+    avstander, idxs = nbr.kneighbors(blindveger_array)
+    avstander = avstander[:,1]
+    idxs = idxs[:,1]
+    
+    # start- og sluttgeometrier for de nye lenkene, hvis under ønsket avstand
+    fra = np.array([geom.wkt for dist, geom in zip(avstander, blindveger.geometry)
+                            if dist < avstand and dist > 0])
+    
+    til = np.array([blindveger.loc[blindveger.index==idx, "wkt"].iloc[0]
+                            for dist, idx in zip(avstander, idxs)
+                            if dist < avstand and dist > 0])
+
+    # lag GeoDataFrame med rette linjer
+    fra =  pygeos.from_shapely(gpd.GeoSeries.from_wkt(fra, crs=crs))
+    til =  pygeos.from_shapely(gpd.GeoSeries.from_wkt(til, crs=crs))
+    nye_lenker = pd.DataFrame()
+    nye_lenker["geometry"] = pygeos.shortest_line(fra, til)
+    nye_lenker = gpd.GeoDataFrame(nye_lenker, geometry="geometry", crs=crs)
+    
+    # lag alle de andre kolonnene
+    nye_lenker["sperring"] = 1
+    nye_lenker["minutter"] = 0.02
+    nye_lenker["turn_restriction"] = np.nan
+
+    ytterpunkter = nye_lenker.geometry.boundary.explode(ignore_index=True) 
+    wkt_geom = [f"POINT ({x} {y})" for x, y in zip(ytterpunkter.x, ytterpunkter.y)]
+    nye_lenker["source_wkt"], nye_lenker["target_wkt"] = wkt_geom[0::2], wkt_geom[1::2]
+    
+    wkt_id_dict = {wkt: id for wkt, id in zip(blindveger["wkt"], blindveger["node_id"])}
+    nye_lenker["source"] = nye_lenker["source_wkt"].map(wkt_id_dict)
+    nye_lenker["target"] = nye_lenker["target_wkt"].map(wkt_id_dict)
+    
+    wkt_kat_dict = {wkt: kat for wkt, kat in zip(veger["source_wkt"], veger["category"])}
+    nye_lenker["category"] = nye_lenker["source_wkt"].map(wkt_kat_dict)
+    
+    return nye_lenker
+
 
 def turn_restr(veger, turn_restrictions):
     
@@ -288,105 +369,78 @@ def turn_restr(veger, turn_restrictions):
         veger_edges.loc[(veger_edges["linkid"].isin(turn_restrictions["fromlinkid"])), "turn_restriction"] = False
 
     return gdf_concat([veger_edges, dobbellenker])
- 
-
-# lag retningsløst nettverk
-def network_from_geometry(veger, 
-                          minute_col = None):
-    
-    veger_kopi = veger.copy()
-    
-    veger_kopi["idx"] = veger_kopi.index
-    
-    veger_kopi = veger_kopi.to_crs(25833)
-    veger_kopi = fjern_tomme_geometrier(veger_kopi)
-#    veger_kopi["geometry"] = shapely.line_merge(shapely.force_2d(veger_kopi.geometry)) 
-    veger_kopi["geometry"] = pygeos.line_merge(pygeos.force_2d(pygeos.from_shapely(veger_kopi.geometry)))   
-    n = len(veger_kopi)
-    veger_kopi = veger_kopi.explode(ignore_index=True)
-    if len(veger_kopi)<n and minute_col:
-        print(f"Advarsel: {len(veger_kopi)-n} multigeometrier ble splittet. Minutt-kostnader blir feil for disse.")
-        #TODO: lag ny minutt-kolonne manuelt her
-    
-    # nye node-id-er fra endepunkter som følger index (fordi jeg indexer med numpy arrays i avstand_til_noder())   
-    ytterpunkter = veger_kopi.copy()
-    ytterpunkter["geometry"] = ytterpunkter.geometry.boundary 
-    sirkler = ytterpunkter.loc[ytterpunkter.is_empty, "idx"] #sirkler har tom boundary
-    veger_kopi = veger_kopi[~veger_kopi.idx.isin(sirkler)]
-
-    ytterpunkter = veger_kopi.geometry.boundary.explode(ignore_index=True) # boundary gir multipunkt med to ytterpunkter for hver linje, og explode() (til singlepart) gir en dobbelt så lang tabell med enkeltpunkter
-    wkt_geom = [f"POINT ({x} {y})" for x, y in zip(ytterpunkter.x, ytterpunkter.y)]
-    veger_kopi["source_wkt"], veger_kopi["target_wkt"] = wkt_geom[0::2], wkt_geom[1::2] # gjør annenhvert ytterpunkt til source_wkt og target_wkt
-    
-    veger_kopi = make_node_ids(veger_kopi)
-        
-    if minute_col in veger_kopi.columns:
-        veger_kopi["minutter"] = veger_kopi[minute_col]
-        veger_kopi = veger_kopi[veger_kopi["minutter"] >= 0, 
-                                ["source_wkt", "target_wkt", "minutter", "meter", "geometry"]]    
-    else:
-        veger_kopi = veger_kopi[veger_kopi["meter"] >= 0,
-                                ["source_wkt", "target_wkt", "meter", "geometry"]]
-
-    for col in ["source", "target", "source_wkt", "target_wkt"]:
-        veger_kopi[col] = veger_kopi[col].astype(str).astype("category")
-    
-    veger_kopi["turn_restriction"] = False
-    
-    return veger_kopi
 
 
-def make_node_ids(veger_kopi):
+def lag_node_ids(veger, crs=25833):
     """ Nye node-id-er som følger index (fordi jeg indexer med numpy arrays i avstand_til_noder()) """
-
-    sources = veger_kopi[["source_wkt"]].rename(columns={"source_wkt":"wkt"})  
-    targets = veger_kopi[["target_wkt"]].rename(columns={"target_wkt":"wkt"})
-    noder = (pd.concat([sources, targets], axis=0, ignore_index=True)
-                .drop_duplicates(subset=["wkt"])
-                .reset_index(drop=True) # viktig at node_id følger index for å kunne indekse på numpy arrays i graf()
-    )
+    
+    if not "oneway" in veger.columns:
+        veger["oneway"] = 0
+        fjern = True
+    else:
+        fjern = False
+    
+    sources = veger[["source_wkt", "oneway"]].rename(columns={"source_wkt":"wkt"})
+    targets = veger[["target_wkt", "oneway"]].rename(columns={"target_wkt":"wkt"})
+        
+    noder = pd.concat([sources, targets], axis=0, ignore_index=True)
+    
+    # tell opp antall forekomster av hver node (del toveiskjørte på to)
+    noder["n"] = np.where((noder["oneway"]=="B") | (noder["oneway"]=="N"), 
+                          0.5, 1)
+    noder["n"] = noder["wkt"].map(noder[["wkt", "n"]].groupby("wkt").sum()["n"])
+    
+    noder = noder.drop_duplicates(subset=["wkt"]).reset_index(drop=True) # viktig at node_id følger index for å kunne indekse på numpy arrays i graf()
+    
     noder["node_id"] = noder.index
     noder["node_id"] = noder["node_id"].astype(str) # funker ikke med numeriske node-navn i igraph, pussig nok...
+
+    noder = noder[["node_id", "wkt", "n"]]
     
     #koble på de nye node-id-ene
-    veger_kopi = (veger_kopi
+    veger = (veger
             .drop(["source", "target", "nz_idx"], axis=1, errors="ignore")
             .merge(noder, left_on = "source_wkt", right_on = "wkt", how="inner")
             .rename(columns={"node_id":"source"})
-            .drop("wkt",axis=1)
+            .drop(["wkt", "n"], axis=1)
             .merge(noder, left_on = "target_wkt", right_on = "wkt", how="inner")
             .rename(columns={"node_id":"target"})
-            .drop("wkt",axis=1)
+            .drop(["wkt", "n"], axis=1)
     )
     
-    veger_kopi["meter"] = veger_kopi.length
+    veger["meter"] = veger.length
     
     # fjern duplikatlenkene med høyest kostnad (siden disse aldri vil bli brukt)
-    if "minutter" in veger_kopi.columns:
-        veger_kopi = veger_kopi.sort_values("minutter", ascending=True)
+    if "minutter" in veger.columns:
+        veger = veger.sort_values("minutter", ascending=True)
     else:     
-        veger_kopi = veger_kopi.sort_values("meter", ascending=True)
+        veger = veger.sort_values("meter", ascending=True)
              
-    veger_kopi.drop_duplicates(subset=["source", "target"]).reset_index(drop=True)
-
-    return veger_kopi
+    veger = veger.drop_duplicates(subset=["source", "target"]).reset_index(drop=True)
+    
+    if fjern:
+        veger = veger.drop("oneway", axis=1)
+        
+    noder["geometry"] = gpd.GeoSeries.from_wkt(noder.wkt, crs=crs)
+    noder = gpd.GeoDataFrame(noder, geometry="geometry", crs=crs)
+    noder = noder.reset_index(drop=True)
+    
+    return veger, noder
 
 
 def finn_source(veger, source):
-    # hvis ikke angitte kolonner finnes i vegdataene, sjekk om andre kolonner matcher. 
-    # lager ny kolonne hvis ingen matcher. Gir feilmelding hvis flere enn en matcher.
     if not source in veger.columns:
-        n = 0
+        mulige = []
         for col in veger.columns:
             if "from" in col and "node" in col or "source" in col:
                 source = col
-                n += 1
-        if n == 1:
+                mulige.append(col)
+        if len(mulige) == 1:
             print(f"Bruker '{source}' som source-kolonne")
-        elif n == 0:
+        elif len(mulige) == 0:
             veger[source] = np.nan
-        elif n > 1:
-            raise ValueError("Flere kolonner kan inneholde source-id-er")
+        elif len(mulige) > 1:
+            raise ValueError(f"Flere kolonner kan inneholde source-id-er: {', '.join(mulige)}")
     return veger[source]
 
 
@@ -416,7 +470,7 @@ def finn_linkid(veger, linkid):
         if n == 1:
             print(f"Bruker '{linkid}' som linkid-kolonne")
         elif n == 0:
-            veger[linkid] = np.nan #godta dette eller raise ValueError("Finner ikke linkid-kolonne") ?
+            veger[linkid] = np.nan
         elif n > 1:
             raise ValueError("Flere kolonner kan inneholde linkid-id-er")
     return veger[linkid]
@@ -432,7 +486,7 @@ def finn_minutter(veger, minutter) -> tuple:
     elif "ft_minutes" in veger.columns and "tf_minutes" in veger.columns:
         return veger["ft_minutes"], veger["tf_minutes"]
     else:
-        raise ValueError("Finner ikke kolonner med minutter")
+        return np.nan, np.nan
 
 
 def finn_vegkategori(veger, vegkategori):
@@ -446,7 +500,7 @@ def finn_vegkategori(veger, vegkategori):
         veger["category"] = veger["roadid"].map(lambda x: x.replace('{','').replace('}','')[0])
         return veger["category"] 
     else:
-        raise ValueError("Finner ikke vegkategori-kolonne")
+        return np.nan
 
 
 def finn_og_omkod_kommunekolonne(veger, kommunekolonne):
@@ -460,4 +514,4 @@ def finn_og_omkod_kommunekolonne(veger, kommunekolonne):
     if n == 1:
         return veger[komm_col].map(lambda x: str(int(x)).zfill(4)).astype("category")
     else:
-        return 0
+        return np.nan
