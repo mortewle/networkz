@@ -2,21 +2,27 @@ import geopandas as gpd
 from dataclasses import dataclass
 from copy import copy, deepcopy
 
-from networkz.nettverksclass import Nettverk, NYESTE_AAR, NETTVERKSSTI_BIL, NETTVERKSSTI_SYKKELFOT
 from networkz.od_cost_matrix import od_cost_matrix
 from networkz.shortest_path import shortest_path
 from networkz.service_area import service_area
 from networkz.nettverk import lag_node_ids
+from networkz.hjelpefunksjoner import read_geopandas
 
 
-#TODO: sykkelfot, 
-# beregn min. manuelt med ny metode
+# årene det ligger tilrettelagte vegnettverk på Dapla.
+# hvis man vil bruke et annet nettverk, kan man kjøre det gjennom lag_nettverk().
+NYESTE_AAR = 2022
+ELDSTE_AAR = 2019
 
 
-"""
-Først regler for kjøretøyene. I hver sin class for å gjøre det litt mer oversiktlig. 
+#NETTVERK = f"ssb-prod-dapla-felles-data-delt/GIS/Vegnett/{NYESTE_AAR}/vegnett_{NYESTE_AAR}.parquet"
+NETTVERKSSTI_BIL = f"C:/Users/ort/OneDrive - Statistisk sentralbyrå/data/klargjorte_nettverk/nettverk_bil_{NYESTE_AAR}.parquet"
+NETTVERKSSTI_SYKKELFOT = f"C:/Users/ort/OneDrive - Statistisk sentralbyrå/data/klargjorte_nettverk/nettverk_sykkelfot_{NYESTE_AAR}.parquet"
+
+
+""" Først regler for kjøretøyene. I hver sin class for å gjøre det litt mer oversiktlig. 
 Class-ene har ingen effekt utover å definere standardreglene for kjøretøyet som velges i Graf-class-en.
-Reglene/parametrene kan settes i Graf(). """
+Reglene (parametrene) kan settes i Graf(). """
 
 @dataclass
 class ReglerFot:
@@ -26,7 +32,7 @@ class ReglerFot:
     nettverkssti: str = NETTVERKSSTI_SYKKELFOT
     max_aadt: int = None
     max_fartsgrense: int = None
-    
+
 @dataclass
 class ReglerSykkel:
     directed: bool = True
@@ -39,17 +45,16 @@ class ReglerSykkel:
 @dataclass
 class ReglerBil:
     directed: bool = True
-    turn_restrictions: bool = False #svingforbud. midlr false
+    turn_restrictions: bool = False # svingforbud. midlr false
     sperring: str = "ERFKPS" # hvilke vegkategorier hvor vegbommer skal være til hinder. Hvis sperring er None, er alle bommer lov. Hvis sperring=='ERFKS', er det lov å kjøre gjennom private bommer.    
     kost_til_nodene: int = 10
     nettverkssti: str = NETTVERKSSTI_BIL
     
 
-class Graf(Nettverk):
-    """ 
-    Class som inneholder vegnettet, nodene og generelle regler for hvordan nettverksanalysen skal gjennomføres.
-    Regler knyttet til kjøretøyet går via ReglerSykkel, ReglerFot og ReglerBil, men parametrene godtas her.
-    Super-class-en Nettverk inneholder metoder for å hente, filtrere og omkode nettverket. """
+class Graf:
+    """ Class som inneholder vegnettet, nodene og generelle regler for hvordan nettverksanalysen skal gjennomføres.
+    Regler knyttet til kjøretøyet går via ReglerSykkel, ReglerFot og ReglerBil, men parametrene godtas her. 
+    """
     
     def __init__(self,
                  
@@ -65,7 +70,7 @@ class Graf(Nettverk):
                  # generelle regler for nettverksanalysen
                  kostnad = "minutter",
                  fjern_isolerte = True, 
-                 dist_faktor = 15,
+                 dist_faktor = 10,
                  search_tolerance = 1000,
                  
                  # regler knyttet til kjøretøyet (parametrene i kjøretøy-class-ene)
@@ -74,21 +79,31 @@ class Graf(Nettverk):
         
         self._aar = aar
         self.nettverk = nettverk
-        self._kommuner = kommuner
         
-        self._kjoretoy = self.bestem_kjoretoy(kjoretoy)
+        # sørg for at kommunene er i liste og har 4 bokstaver      
+        if kommuner:            
+            if isinstance(kommuner, (str, int, float)):
+                self._kommuner = [str(int(kommuner)).zfill(4)]
+            else:
+                self._kommuner = [str(int(k)).zfill(4) for k in kommuner]
+        else:
+            self._kommuner = None
 
-        self._kostnad = kostnad
-                    
-        if self._kjoretoy=="bil":
+        # hent ut reglene for kjøretøyet
+        kjoretoy = kjoretoy.lower()
+        if "bil" in kjoretoy or "car" in kjoretoy or "auto" in kjoretoy:
+            self._kjoretoy = "bil"
             self.regler = ReglerBil(**qwargs)
-        elif self._kjoretoy=="sykkel":
+        elif "sykkel" in kjoretoy or "bike" in kjoretoy or "bicyc" in kjoretoy:
+            self._kjoretoy = "sykkel"
             self.regler = ReglerSykkel(**qwargs)
-        elif self._kjoretoy=="fot":
+        elif "fot" in kjoretoy or "foot" in kjoretoy:
+            self._kjoretoy = "fot"
             self.regler = ReglerFot(**qwargs)
         else:
             raise ValueError("kjortetoy må være bil, sykkel eller fot.")
-        
+            
+        self._kostnad = kostnad        
         self.search_tolerance = search_tolerance if search_tolerance else 100000000
         self._fjern_isolerte = fjern_isolerte
         self.dist_faktor = dist_faktor
@@ -101,19 +116,17 @@ class Graf(Nettverk):
             if not "source" in nettverk.columns or not "target" in nettverk.columns:
                 raise ValueError("Finner ikke kolonnene 'source' og/eller 'target'. Kjør nettverket gjennom lag_nettverk() før Graf()")
             self.nettverk = nettverk
-        
-        self.nettverk, self._kommuner = self.velg_kommuner_eller_ikke()
-        
+                
         self.nettverk, self._noder = lag_node_ids(self.nettverk)
         
+        if self._kjoretoy != "bil":
+            self.nettverk["minutter"] = self.nettverk.length / (self.fart * 16.666667)
+            
         self._kostnad = self.sjekk_kostnad(kostnad)
         
         if not "isolert" in self.nettverk.columns:
             self._fjern_isolerte = False
-            
-        if self._kjoretoy != "bil":
-            self.nettverk["minutter"] = self.nettverk.length / (self.fart * 16.666667)
-                
+                    
         if self._kjoretoy=="bil":
             if not "sperring" in self.nettverk.columns:
                 self.sperring = None
@@ -169,6 +182,57 @@ class Graf(Nettverk):
         
         return shortest_path(self, startpunkter, sluttpunkter, id_kolonne, cutoff, destination_count)
     
+    
+    def hent_nettverk(self) -> gpd.GeoDataFrame:
+        
+        if int(self.aar)>NYESTE_AAR or int(self.aar)<ELDSTE_AAR:
+            raise ValueError(f"aar må være mellom {ELDSTE_AAR} og {NYESTE_AAR}")
+        
+        if self.kjoretoy != "bil" and self.aar != NYESTE_AAR:
+            raise ValueError(f"aar må være {NYESTE_AAR} for sykkel/fot")
+            
+        self.nettverkssti = self.nettverkssti.replace(str(NYESTE_AAR), str(self.aar))
+        
+        if self._kommuner:
+            nettverk = read_geopandas(self.nettverkssti, 
+                                      filters=[("KOMMUNENR", "in", self._kommuner)])
+        else:
+            nettverk = read_geopandas(self.nettverkssti)        
+        
+        return nettverk.to_crs(25833)
+     
+    
+    def filtrer_nettverk(self) -> gpd.GeoDataFrame:
+        
+        if self.kjoretoy=="bil":
+            if self.directed and self.turn_restrictions:
+                self.nettverk = self.nettverk[self.nettverk["turn_restriction"] != False]
+            else:
+                if "turn_restriction" in self.nettverk.columns:
+                    self.nettverk = self.nettverk[self.nettverk["turn_restriction"] != True]
+
+            if self.sperring:
+                self.nettverk = self.sett_opp_sperringer()
+            
+        if self.fjern_isolerte:
+            self.nettverk = self.nettverk[self.nettverk["isolert"].fillna(0) == 0]
+                
+        if len(self.nettverk)==0:
+            raise ValueError("Nettverket har 0 rader")      
+        
+        return self.nettverk
+    
+    
+    def sett_opp_sperringer(self) -> gpd.GeoDataFrame:
+        
+        if self.sperring is True or not "category" in self.nettverk.columns:
+            return self.nettverk[self.nettverk["sperring"].astype(int) != 1]
+
+        for vegkat in [vegkat.lower() for vegkat in self.sperring]:
+            self.nettverk = self.nettverk[~((self.nettverk["sperring"].astype(int) == 1) & (self.nettverk["category"].str.lower() == vegkat))]
+            
+        return self.nettverk
+    
  
     def info(self) -> None:
         print("aar: ")
@@ -180,23 +244,7 @@ class Graf(Nettverk):
         print("search_tolerance: ")
         print("dist_faktor: ")
         print("kost_til_nodene: km/t ")
- 
-    
-    def bestem_kjoretoy(self, kjoretoy) -> str:
-        
-        kjoretoy = kjoretoy.lower()
-        
-        if "bil" in kjoretoy or "car" in kjoretoy or "auto" in kjoretoy:
-            self._kjoretoy = "bil"
-        elif "sykkel" in kjoretoy or "bike" in kjoretoy or "bicyc" in kjoretoy:
-            self._kjoretoy = "sykkel"
-        elif "fot" in kjoretoy or "foot" in kjoretoy:
-            self._kjoretoy = "fot"
-        else:
-            self._kjoretoy = kjoretoy
-            
-        return self._kjoretoy
-    
+          
     
     def sjekk_kostnad(self, kostnad):
         """ sjekk om kostnadskolonnen finnes i dataene """
@@ -207,7 +255,7 @@ class Graf(Nettverk):
             raise ValueError("kostnad må være string, liste eller tuple")
         
         kostnader = []
-        for kost in kostnad:
+        for kost in kostnad:                
             for kolonne in self.nettverk.columns:
                 if kost in kolonne or kolonne in kost:
                     kostnader.append(kolonne)
@@ -216,9 +264,12 @@ class Graf(Nettverk):
                 elif "meter" in kost or "dist" in kost:
                     self.nettverk["meter"] = self.nettverk.length
                     kostnader.append("meter")
-          
+                
         if len(kostnader) == 0:
-            raise ValueError("Finner ikke kostnadskolonne")
+            if self.kjoretoy == "bil":
+                raise ValueError("Finner ikke kostnadskolonne")
+            else:
+                kostnader = ["minutter"]
 
         kostnader = list(set(kostnader))
                
