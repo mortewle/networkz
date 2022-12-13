@@ -14,9 +14,8 @@ if _missing_dependencies:
 del _hard_dependencies, _dependency, _missing_dependencies
 
 from networkz.grafclass import Graf
-from networkz.nettverksclass import Nettverk
 
-from networkz.nettverk import lag_nettverk
+from networkz.nettverk import lag_nettverk, finn_isolerte_nettverk, koor_kat, tett_nettverkshull, lag_node_ids, lag_turn_restrictions
 
 from networkz.service_area import service_area
 
