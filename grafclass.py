@@ -28,7 +28,6 @@ Reglene (parametrene) kan settes i Graf(). """
 class ReglerFot:
     directed: bool = False
     fart: int = 5
-    kost_til_nodene: int = 3
     nettverkssti: str = NETTVERKSSTI_SYKKELFOT
     max_aadt: int = None
     max_fartsgrense: int = None
@@ -37,7 +36,6 @@ class ReglerFot:
 class ReglerSykkel:
     directed: bool = True
     fart: int = 20
-    kost_til_nodene: int = 5
     nettverkssti: str = NETTVERKSSTI_SYKKELFOT
     max_aadt: int = None
     max_fartsgrense: int = None
@@ -47,7 +45,6 @@ class ReglerBil:
     directed: bool = True
     turn_restrictions: bool = False # svingforbud. midlr false
     sperring: str = "ERFKPS" # hvilke vegkategorier hvor vegbommer skal være til hinder. Hvis sperring er None, er alle bommer lov. Hvis sperring=='ERFKS', er det lov å kjøre gjennom private bommer.    
-    kost_til_nodene: int = 10
     nettverkssti: str = NETTVERKSSTI_BIL
     
 
@@ -70,8 +67,9 @@ class Graf:
                  # generelle regler for nettverksanalysen
                  kostnad = "minutter",
                  fjern_isolerte = True, 
-                 dist_faktor = 10,
                  search_tolerance = 1000,
+                 dist_faktor = 10,
+                 kost_til_nodene: int = 5,
                  
                  # regler knyttet til kjøretøyet (parametrene i kjøretøy-class-ene)
                  **qwargs 
@@ -105,9 +103,9 @@ class Graf:
             
         self._kostnad = kostnad        
         self.search_tolerance = search_tolerance if search_tolerance else 100000000
-        self._fjern_isolerte = fjern_isolerte
         self.dist_faktor = dist_faktor
-        self.kost_til_nodene = self.kost_til_nodene if self.kost_til_nodene else 0
+        self.kost_til_nodene = kost_til_nodene if kost_til_nodene else 0
+        self._fjern_isolerte = fjern_isolerte
         
         # hent og klargjør nettverket for året og kommunene som er angitt
         if nettverk is None:
