@@ -6,7 +6,6 @@ from networkz.id_greier import bestem_ids, lag_midlr_id, map_ids
 from networkz.lag_igraph import lag_graf
 
 
-
 def od_cost_matrix(G,
                     startpunkter: gpd.GeoDataFrame, 
                     sluttpunkter: gpd.GeoDataFrame,
@@ -28,7 +27,7 @@ def od_cost_matrix(G,
     startpunkter["nz_idx"], sluttpunkter["nz_idx"] = lag_midlr_id(G.noder,
                                                                   startpunkter,
                                                                   sluttpunkter)
-    
+        
     # så loop nettverksberegningen for hver kostnad (hvis flere)
     kostnader = G.kostnad
     if isinstance(kostnader, str):
@@ -41,7 +40,7 @@ def od_cost_matrix(G,
                                                   kostnad,
                                                   startpunkter, 
                                                   sluttpunkter)
-            
+        
         if not radvis:
             
             # selve avstandsberegningen her:
@@ -77,12 +76,14 @@ def od_cost_matrix(G,
         )
 
         out.append(df)
-    
+            
     # samle resultatene for ulike kostnader, med fra og til som index
     out = pd.concat([df.set_index(["fra", "til"]) for df in out], ignore_index=False, axis=1)
     out = out.reset_index()
 
     # gi dataene kolonner med avstand til nærmeste node
+    startpunkter = startpunkter.loc[:, ~startpunkter.columns.duplicated()]
+    sluttpunkter = sluttpunkter.loc[:, ~sluttpunkter.columns.duplicated()]
     out = (out
            .merge(startpunkter[["dist_node_start", "nz_idx"]], left_on="fra", right_on="nz_idx", how="left")
            .drop("nz_idx", axis=1)
