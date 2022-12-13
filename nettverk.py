@@ -17,7 +17,16 @@ def lag_nettverk(veger,
                  kommunekolonne = "municipality",
                  finn_isolerte = True,
                  utvid: int = None, # meter
-                 turn_restrictions = None):
+                 turn_restrictions = None,
+                 behold_kolonner: list = None
+                 ):
+    
+    if behold_kolonner:
+        if isinstance(behold_kolonner, str):
+            behold_kolonner = [behold_kolonner]
+        assert isinstance(behold_kolonner, (list, tuple)), "'behold_kolonner' må være en liste/tuple med kolonnenavn."
+    else:
+        behold_kolonner = []
     
     veger_kopi = veger.copy()
     
@@ -42,7 +51,7 @@ def lag_nettverk(veger,
     # litt opprydning (til utm33-koordinater, endre navn på kolonner, beholde kun relevante kolonner, resette index)
     veger_kopi = (veger_kopi
                   .to_crs(25833)
-                  [["idx", "source", "target", "linkid", "drivetime_fw", "drivetime_bw", "oneway", "sperring", "category", "KOMMUNENR", "geometry"]]
+                  .loc[:, ["idx", "source", "target", "linkid", "drivetime_fw", "drivetime_bw", "oneway", "sperring", "category", "KOMMUNENR", "geometry"] + behold_kolonner]
                   .reset_index(drop=True)
                   )
     
@@ -62,8 +71,8 @@ def lag_nettverk(veger,
     
     if finn_isolerte:
         veger_kopi = finn_isolerte_nettverk(veger_kopi, 
-                                            storrelse=10000,
-                                            ruteloop=2250)
+                                            lengde=10000,
+                                            ruteloop_m=2250)
     else:
         veger_kopi["isolert"] = np.nan
     
@@ -130,7 +139,7 @@ def lag_nettverk(veger,
         assert len(veger_edges)>0
 
     if turn_restrictions:
-        veger_edges = turn_restr(veger_edges, turn_restrictions)
+        veger_edges = lag_turn_restrictions(veger_edges, turn_restrictions)
     else:
         veger_edges["turn_restriction"] = np.nan
     
@@ -146,18 +155,13 @@ def lag_nettverk(veger,
     veger_edges["meter"] = veger_edges.length
 
     veger_edges = veger_edges.loc[(veger_edges.minutter > 0) | (veger_edges.minutter.isna()),
-                                  ["source", "target", "minutter", "meter", "turn_restriction", "oneway", "sperring", vegkategori, "isolert", "KOMMUNENR", "source_wkt", "target_wkt", "geometry"]]
+                                  ["source", "target", "minutter", "meter", "turn_restriction", "oneway", "sperring", vegkategori, "isolert", "KOMMUNENR", "source_wkt", "target_wkt", "geometry"] + behold_kolonner]
     
     # fjern kolonner som ikke ble brukt        
     for col in ["minutter", "turn_restriction", "isolert", vegkategori, "sperring", "KOMMUNENR", "oneway"]:
         if len(veger_edges[~((veger_edges[col].isna()) | (veger_edges[col]==0.02) | (veger_edges[col]==-1))])==0:
             veger_edges = veger_edges.drop(col, axis=1)
-            
-    # category-type for å spare plass
-    for col in ["source", "target", "source_wkt", "target_wkt", vegkategori, "oneway"]:
-        if col in veger_edges.columns:
-            veger_edges[col] = veger_edges[col].astype(str).astype("category")
-
+    
     return veger_edges
 
 
@@ -195,10 +199,16 @@ def koor_kat(gdf,
     return gdf
 
 
-def finn_isolerte_nettverk(veger, storrelse, ruteloop):
+def finn_isolerte_nettverk(veger, lengde: int, ruteloop_m: int):
+    """ Gir vegdataene kolonnen 'isolert', hvor 0 betyr ikke isolert, og andre tall betyr størrelsen på det isolerte nettverket i meter.
+    Finner de isolerte ved å bufre 0.001 meter, dissolve og explode (til singlepart). 
+    Dette gjøres i loop for en rute av gangen, hvor index-verdier (idx) under angitt lengde lagres i tuple (fordi det tar mindre plass enn lister).
+    Så gjentas loopen pga grensetilfeller basert på ruter som er halvveis forskjøvet. idx-er som er med i begge loop-runder, anses som isolerte.
+    """
     
-    veger = koor_kat(veger, meter = ruteloop, x2 = True)
-
+    # gir vegdataene to kolonner med koordinatkategorier. Den andre kolonnen inneholder rutekategorier som er halvveis forskøvet
+    veger = koor_kat(veger, meter = ruteloop_m, x2 = True)
+    
     if "sperring" in veger.columns:
         ikke_sperringer = veger[veger.sperring.astype(int) != 1]
         sperringer = veger[veger.sperring.astype(int) == 1]
@@ -217,7 +227,7 @@ def finn_isolerte_nettverk(veger, storrelse, ruteloop):
             sum_lengde = dissolvet.length.sum()
             singlepart = dissolvet.explode(ignore_index=True)
             singlepart["utstrekning"] = singlepart.convex_hull.area
-            lite_nettverk = singlepart[(singlepart.length < storrelse*2) & 
+            lite_nettverk = singlepart[(singlepart.length < lengde*2) & 
                                        (singlepart.length < sum_lengde*0.5) &
                                        (singlepart["utstrekning"] < sum_lengde)
                                        ]
@@ -300,7 +310,7 @@ def tett_nettverkshull(noder, veger, avstand, crs=25833):
     return nye_lenker
 
 
-def turn_restr(veger, turn_restrictions):
+def lag_turn_restrictions(veger, turn_restrictions):
     
     veger_edges = veger.copy()
     
@@ -330,7 +340,7 @@ def turn_restr(veger, turn_restrictions):
     # gjør lenkene med restrictions til første del av nye dobbellenker som skal lages
     lenker_med_restriction = (lenker_med_restriction
                               .drop("edge1fid", axis=1, errors="ignore")
-                              .rename(columns={"target": "middlenode", "minutter": "minutter1", "meter": "meter1", "geometry": "geom1", "idx": "edge1fid"}) 
+                              .rename(columns={"target": "middlenode", "minutter": "minutter1", "meter": "meter1", "geometry": "geom1", "idx": "edge1fid"})
                               .loc[:, ["source", "source_wkt", "middlenode", "minutter1", "meter1", "geom1", "edge1fid"]] )
     # klargjør tabell som skal bli andre del av dobbellenkene
     restrictions = (veger_edges
@@ -347,11 +357,11 @@ def turn_restr(veger, turn_restrictions):
     # fjern nå dobbellenkene det faktisk er svingforbud
     if "edge1fid" in turn_restrictions.columns:
         dobbellenker = fra_noder_med_restriction[
-                            ~((fra_noder_med_restriction["edge1fid"].isin(turn_restrictions["edge1fid"])) & 
+                            ~((fra_noder_med_restriction["edge1fid"].isin(turn_restrictions["edge1fid"])) &
                                 (fra_noder_med_restriction["edge2fid"].isin(turn_restrictions["edge2fid"])))]
     else:
         dobbellenker = fra_noder_med_restriction[
-                            ~((fra_noder_med_restriction["source"].isin(turn_restrictions["fromfromnode"])) & 
+                            ~((fra_noder_med_restriction["source"].isin(turn_restrictions["fromfromnode"])) &
 #                                   (fra_noder_med_restriction["middlenode"].isin(turn_restrictions["fromtonode"])) &
                                 (fra_noder_med_restriction["target"].isin(turn_restrictions["totonode"])))]
     
@@ -435,6 +445,9 @@ def finn_source(veger, source):
             if "from" in col and "node" in col or "source" in col:
                 source = col
                 mulige.append(col)
+            elif "start" in col and "node" in col or "fra" in col and "node" in col:
+                source = col
+                mulige.append(col)
         if len(mulige) == 1:
             print(f"Bruker '{source}' som source-kolonne")
         elif len(mulige) == 0:
@@ -446,17 +459,20 @@ def finn_source(veger, source):
 
 def finn_target(veger, target):
     if not target in veger.columns:
-        n = 0
+        mulige = []
         for col in veger.columns:
             if "to" in col and "node" in col or "target" in col:
                 target = col
-                n += 1
-        if n == 1:
+                mulige.append(col)
+            elif "end" in col and "node" in col or "slutt" in col and "node" in col:
+                target = col
+                mulige.append(col)
+        if len(mulige) == 1:
             print(f"Bruker '{target}' som target-kolonne")
-        elif n == 0:
+        elif len(mulige) == 0:
             veger[target] = np.nan
-        elif n > 1:
-            raise ValueError("Flere kolonner kan inneholde target-id-er")
+        elif len(mulige) > 1:
+            raise ValueError(f"Flere kolonner kan inneholde target-id-er: {', '.join(mulige)}")
     return veger[target]
 
 
