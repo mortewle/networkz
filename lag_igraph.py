@@ -3,6 +3,22 @@ import igraph
 from sklearn.neighbors import NearestNeighbors
 
 
+def m_til_min(x, G):
+    """ 
+    gjør om meter til minutter for lenkene mellom punktene og nabonodene.
+    ganger luftlinjeavstanden med 1.5 siden det alltid er svinger i Norge. """
+    
+    return (x * 1.5) / (16.666667 * G.kost_til_nodene)
+
+
+def dist_faktor_avstand(dist_min: int, dist_faktor: int) -> int: 
+    """ Finner terskelavstanden for lagingen av lenker mellom start- og sluttpunktene og nodene. Alle noder innenfor denne avstanden kobles med punktene.
+    Terskelen er avstanden fra hvert punkt til nærmeste node pluss x prosent pluss x meter, hvor x==dist_faktor.
+    Så hvis dist_faktor=10 og avstanden til node er 100, blir terskelen 120 meter (100*1.10 + 10). """
+    
+    return (dist_min * (1 + dist_faktor/100) + dist_faktor)
+
+
 # lager igraph-graf som inkluderer lenker til/fra start-/sluttpunktene
 def lag_graf(G,
              kostnad,
@@ -56,14 +72,6 @@ def lag_graf(G,
     return G2, startpunkter, sluttpunkter
 
 
-def m_til_min(x, G):
-    """ 
-    gjør om meter til minutter for lenkene mellom punktene og nabonodene.
-    ganger luftlinjeavstanden med 1.5 siden det alltid er svinger i Norge. """
-    
-    return (x * 1.5) / (16.666667 * G.kost_til_nodene)
-
-
 def avstand_til_noder(punkter, G, hva):
         
     """
@@ -76,7 +84,7 @@ def avstand_til_noder(punkter, G, hva):
     noder = G.noder
     
     punkter = punkter.reset_index(drop=True)
-        
+    
     # arrays med koordinat-tupler
     punkter_array = np.array([(x, y) for x, y in zip(punkter.geometry.x, punkter.geometry.y)])
     noder_array = np.array([(x, y) for x, y in zip(noder.geometry.x, noder.geometry.y)])
@@ -99,10 +107,10 @@ def avstand_til_noder(punkter, G, hva):
 
     # lag array med avstandene. 0 hvis mer enn search_tolerance eller dist_faktor-en
     avstander = np.array([[dist
-                          if dist <= G.search_tolerance and dist <= (dist_min*(1+G.dist_faktor/100)+G.dist_faktor) else 0
+                          if dist <= G.search_tolerance and dist <= dist_faktor_avstand(dist_min, G.dist_faktor) else 0
                           for dist in avstander[i]] 
                           for i, dist_min in zip(punkter.index, punkter.dist_node)])
-         
+    
     # velg ut alt som er under search_tolerance og innenfor dist_faktor-en
     edges = edges[avstander != 0]
     avstander = avstander[avstander != 0]
