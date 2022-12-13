@@ -43,6 +43,9 @@ def lag_graf(G,
         avstander_start = [0 for _ in avstander_start]
     elif kostnad=="minutter":
         avstander_start = [m_til_min(x, G) for x in avstander_start]
+    elif kostnad=="meter":
+        avstander_start = [x*1.5 for x in avstander_start]
+        
     
     edges = edges + edges_start
     kostnader = kostnader + avstander_start
@@ -58,7 +61,9 @@ def lag_graf(G,
             avstander_slutt = [0 for _ in avstander_slutt]
         elif kostnad=="minutter":
             avstander_slutt = [m_til_min(x, G) for x in avstander_slutt]
-
+        elif kostnad=="meter":
+            avstander_slutt = [x*1.5 for x in avstander_slutt]
+            
         edges = edges + edges_slutt
         kostnader = kostnader + avstander_slutt
     
