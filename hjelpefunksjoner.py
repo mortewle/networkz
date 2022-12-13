@@ -4,16 +4,31 @@ import numpy as np
 from shapely.wkt import loads
 
 
-def les_geoparquet(fil, crs=25833):
+def les_geoparquet(sti, **qwargs):
     try:
-        import dapla as dp
-        df = dp.read_pandas(sti)
-        df["geometry"] = gpd.GeoSeries.from_wkb(df.geometry)
-        return gpd.GeoDataFrame(df, geometry="geometry", crs=crs)
+        from dapla import FileClient
+        fs = FileClient.get_gcs_file_system()
+        with fs.open(sti, mode='rb') as file: 
+            return gpd.read_parquet(file, **qwargs)
     except Exception:
-        return gpd.read_parquet(fil).to_crs(25833)
-    
-    
+        return gpd.read_parquet(sti, **qwargs)
+  
+  
+def read_geopandas(sti, **qwargs):
+    try:
+        from dapla import FileClient
+        fs = FileClient.get_gcs_file_system()
+        with fs.open(sti, mode='rb') as file: 
+            if "parquet" in sti:
+                return gpd.read_parquet(file, **qwargs)
+            return gpd.read_file(file, **qwargs)
+    except Exception:
+        try:
+            return gpd.read_parquet(sti, **qwargs)
+        except Exception:
+            return gpd.read_file(sti, **qwargs)
+
+
 # konverterer til geodataframe fra geoseries, shapely-objekt, wkt, liste med shapely-objekter eller shapely-sekvenser 
 # OBS: når man har shapely-objekter eller wkt, bør man sette crs. 
 def til_gdf(geom, set_crs=None, **qwargs) -> gpd.GeoDataFrame:
