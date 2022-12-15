@@ -14,6 +14,7 @@ def shortest_path(G,
                     id_kolonne = None,
                     cutoff: int = None,
                     destination_count: int = None,
+                    radvis = False,
                     ):
 
     import warnings
@@ -32,39 +33,47 @@ def shortest_path(G,
                                               sluttpunkter)
     
     # funksjonen get_shortest_paths() må loopes for hver fra-til-kombinasjon
+    def kjor_korteste(start, slutt, G, G2):
+        
+        if len(start)==0 or len(slutt)==0:
+            return
+        
+        res = G2.get_shortest_paths(weights='weight', 
+                                    v = fra_id, 
+                                    to = til_id)
+        
+        if len(res[0])==0:
+            linjer.append(gpd.GeoDataFrame(pd.DataFrame({"fra": [fra_id], "til": [til_id], G.kostnad: [np.nan], "geometry": LineString()}), geometry="geometry", crs=25833))
+            return
+        
+        path = G2.vs[res[0]]["name"]
+        
+        linje = G.nettverk.loc[(G.nettverk.source.isin(path)) & (G.nettverk.target.isin(path)), ["geometry"]]
+        
+        linje = linje.dissolve()
+        
+        linje["fra"] = fra_id
+        linje["til"] = til_id
+        
+        # for å få kostnaden også:
+        kost = G2.distances(weights='weight', source = start["nz_idx"], target = slutt["nz_idx"])
+        linje[G.kostnad] = kost[0][0]
+        
+        return [linje]
+    
     linjer = []
-    for fra_id in startpunkter["nz_idx"]:
-        for til_id in sluttpunkter["nz_idx"]:
-            
+    if radvis:
+        for fra_id, til_id in zip(startpunkter["nz_idx"], sluttpunkter["nz_idx"]):
             start = startpunkter[startpunkter["nz_idx"]==fra_id]
             slutt = sluttpunkter[sluttpunkter["nz_idx"]==til_id]
-            
-            if len(start)==0 or len(slutt)==0:
-                continue
-            
-            res = G2.get_shortest_paths(weights='weight', 
-                                        v = fra_id, 
-                                        to = til_id)
-            
-            if len(res[0])==0:
-                linjer.append(gpd.GeoDataFrame(pd.DataFrame({"fra": [fra_id], "til": [til_id], G.kostnad: [np.nan], "geometry": LineString()}), geometry="geometry", crs=25833))
-                continue
-            
-            path = G2.vs[res[0]]["name"]
-            
-            linje = G.nettverk.loc[(G.nettverk.source.isin(path)) & (G.nettverk.target.isin(path)), ["geometry"]]
-            
-            linje = linje.dissolve()
-            
-            linje["fra"] = fra_id
-            linje["til"] = til_id
-            
-            # for å få kostnaden også:
-            kost = G2.distances(weights='weight', source = start["nz_idx"], target = slutt["nz_idx"])
-            linje[G.kostnad] = kost[0][0]
-            
-            linjer.append(linje)
-    
+            linjer = linjer + kjor_korteste(start, slutt, G, G2)
+    else:
+        for fra_id in startpunkter["nz_idx"]:
+            for til_id in sluttpunkter["nz_idx"]:
+                start = startpunkter[startpunkter["nz_idx"]==fra_id]
+                slutt = sluttpunkter[sluttpunkter["nz_idx"]==til_id]
+                linjer = linjer + kjor_korteste(start, slutt, G, G2)
+                    
     linjer = gdf_concat(linjer)
     
     linjer = (linjer
