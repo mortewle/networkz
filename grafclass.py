@@ -10,7 +10,7 @@ from networkz.hjelpefunksjoner import read_geopandas
 
 
 # årene det ligger tilrettelagte vegnettverk på Dapla.
-# hvis man vil bruke et annet nettverk, kan man kjøre det gjennom lag_nettverk().
+# hvis man vil bruke et annet nettverk, kan man kjøre det gjennom networkz.nettverk.lag_nettverk.
 NYESTE_AAR = 2022
 ELDSTE_AAR = 2019
 
@@ -18,6 +18,7 @@ ELDSTE_AAR = 2019
 #NETTVERK = f"ssb-prod-dapla-felles-data-delt/GIS/Vegnett/{NYESTE_AAR}/vegnett_{NYESTE_AAR}.parquet"
 NETTVERKSSTI_BIL = f"C:/Users/ort/OneDrive - Statistisk sentralbyrå/data/klargjorte_nettverk/nettverk_bil_{NYESTE_AAR}.parquet"
 NETTVERKSSTI_SYKKELFOT = f"C:/Users/ort/OneDrive - Statistisk sentralbyrå/data/klargjorte_nettverk/nettverk_sykkelfot_{NYESTE_AAR}.parquet"
+KOMMUNESTI = (f"C:/Users/ort/OneDrive - Statistisk sentralbyrå/data/Basisdata_0000_Norge_25833_Kommuner_FGDB.gdb", "kommune")
 
 
 """ Først regler for kjøretøyene. I hver sin class for å gjøre det litt mer oversiktlig. 
@@ -50,8 +51,7 @@ class ReglerBil:
 
 class Graf:
     """ Class som inneholder vegnettet, nodene og generelle regler for hvordan nettverksanalysen skal gjennomføres.
-    Regler knyttet til kjøretøyet går via ReglerSykkel, ReglerFot og ReglerBil, men parametrene godtas her. 
-    """
+    Regler knyttet til kjøretøyet går via ReglerSykkel, ReglerFot og ReglerBil, men parametrene godtas her. """
     
     def __init__(self,
                  
@@ -170,6 +170,7 @@ class Graf:
                         id_kolonne = None,
                         cutoff: int = None,
                         destination_count: int = None,
+                        radvis = False
                         ):
 
         self.nettverk = self.filtrer_nettverk()
@@ -178,7 +179,7 @@ class Graf:
         if not isinstance(self.kostnad, str):
             raise ValueError("Kan bare ha én kostnad (str) i shortest_path")
         
-        return shortest_path(self, startpunkter, sluttpunkter, id_kolonne, cutoff, destination_count)
+        return shortest_path(self, startpunkter, sluttpunkter, id_kolonne, cutoff, destination_count, radvis)
     
     
     def hent_nettverk(self) -> gpd.GeoDataFrame:
@@ -192,8 +193,17 @@ class Graf:
         self.nettverkssti = self.nettverkssti.replace(str(NYESTE_AAR), str(self.aar))
         
         if self._kommuner:
-            nettverk = read_geopandas(self.nettverkssti, 
+            try:
+                nettverk = read_geopandas(self.nettverkssti, 
                                       filters=[("KOMMUNENR", "in", self._kommuner)])
+            except Exception:
+                kommuner = read_geopandas(KOMMUNESTI[0], layer=KOMMUNESTI[1]).rename(columns={"kommunenummer": "KOMMUNENR"})
+                kommnr = [self._kommuner] if isinstance(self._kommuner, str) else self._kommuner
+                kommuner = kommuner.loc[kommuner.KOMMUNENR.isin(kommnr), ["KOMMUNENR", "geometry"]]
+                
+                nettverk = read_geopandas(self.nettverkssti)
+                nettverk = nettverk.sjoin(kommuner, how="inner").drop("index_right", axis=1, errors="ignore")
+                
         else:
             nettverk = read_geopandas(self.nettverkssti)        
         
@@ -230,19 +240,7 @@ class Graf:
             self.nettverk = self.nettverk[~((self.nettverk["sperring"].astype(int) == 1) & (self.nettverk["category"].str.lower() == vegkat))]
             
         return self.nettverk
-    
- 
-    def info(self) -> None:
-        print("aar: ")
-        print("nettverk: ")
-        print("kostnad: ")
-        print("kjoretoy: ")
-        print("directed: ")
-        print("turn_restrictions: ")
-        print("search_tolerance: ")
-        print("dist_faktor: ")
-        print("kost_til_nodene: km/t ")
-          
+            
     
     def sjekk_kostnad(self, kostnad):
         """ sjekk om kostnadskolonnen finnes i dataene """
@@ -280,6 +278,18 @@ class Graf:
         return kostnader
     
     
+    def info(self) -> None:
+        print("aar: ")
+        print("nettverk: ")
+        print("kostnad: ")
+        print("kjoretoy: ")
+        print("directed: ")
+        print("turn_restrictions: ")
+        print("search_tolerance: ")
+        print("dist_faktor: ")
+        print("kost_til_nodene: km/t ")
+        
+        
     # sørg for at kostnaden er brukbar
     @property
     def kostnad(self):
@@ -358,4 +368,6 @@ class Graf:
  
     # for å gjøre regel-atributtene tilgjengelig direkte i Graf-objektet.
     def __getattr__(self, navn):
-        return self.regler.__getattribute__(navn)        
+        return self.regler.__getattribute__(navn)
+    
+    
