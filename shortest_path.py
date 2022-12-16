@@ -15,6 +15,7 @@ def shortest_path(G,
                     cutoff: int = None,
                     destination_count: int = None,
                     radvis = False,
+                    tell_opp = False,
                     ):
 
     import warnings
@@ -22,6 +23,7 @@ def shortest_path(G,
             
     startpunkter = startpunkter.copy().to_crs(25833)
     sluttpunkter = sluttpunkter.copy().to_crs(25833)
+    G.nettverk = G.nettverk.to_crs(25833)
 
     id_kolonner = bestem_ids(id_kolonne, startpunkter, sluttpunkter)
 
@@ -33,7 +35,7 @@ def shortest_path(G,
                                               sluttpunkter)
     
     # funksjonen get_shortest_paths() må loopes for hver fra-til-kombinasjon
-    def kjor_korteste(start, slutt, G, G2):
+    def kjor_korteste(start, slutt, G, G2, tell_opp):
         
         if len(start)==0 or len(slutt)==0:
             return
@@ -44,9 +46,12 @@ def shortest_path(G,
         
         if len(res[0])==0:
             linjer.append(gpd.GeoDataFrame(pd.DataFrame({"fra": [fra_id], "til": [til_id], G.kostnad: [np.nan], "geometry": LineString()}), geometry="geometry", crs=25833))
-            return
+            return []
         
         path = G2.vs[res[0]]["name"]
+        
+        if tell_opp:
+            return [pd.DataFrame({"source_target": (str(source) + "_" + str(target) for source, target in zip(path[:-1], path[1:]))})]
         
         linje = G.nettverk.loc[(G.nettverk.source.isin(path)) & (G.nettverk.target.isin(path)), ["geometry"]]
         
@@ -66,14 +71,24 @@ def shortest_path(G,
         for fra_id, til_id in zip(startpunkter["nz_idx"], sluttpunkter["nz_idx"]):
             start = startpunkter[startpunkter["nz_idx"]==fra_id]
             slutt = sluttpunkter[sluttpunkter["nz_idx"]==til_id]
-            linjer = linjer + kjor_korteste(start, slutt, G, G2)
+            linjer = linjer + kjor_korteste(start, slutt, G, G2, tell_opp)
     else:
         for fra_id in startpunkter["nz_idx"]:
             for til_id in sluttpunkter["nz_idx"]:
                 start = startpunkter[startpunkter["nz_idx"]==fra_id]
                 slutt = sluttpunkter[sluttpunkter["nz_idx"]==til_id]
-                linjer = linjer + kjor_korteste(start, slutt, G, G2)
-                    
+                linjer = linjer + kjor_korteste(start, slutt, G, G2, tell_opp)
+    
+    if tell_opp:
+        lenker = pd.concat(linjer, ignore_index=True)
+        lenker["antall"] = 1
+        lenker = lenker.groupby("source_target").count()["antall"].reset_index()
+        
+        veger = G.nettverk[["geometry", "source", "target"]]
+        veger["source_target"] = veger.source + "_" + veger.target
+        
+        return veger.merge(lenker, on="source_target", how="inner").drop("source_target", axis=1)
+        
     linjer = gdf_concat(linjer)
     
     linjer = (linjer
