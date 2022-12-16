@@ -1,6 +1,6 @@
-import geopandas as gpd
-import pandas as pd
 import numpy as np
+import pandas as pd
+import geopandas as gpd
 import pygeos
 from networkz.id_greier import bestem_ids, lag_midlr_id, map_ids
 from networkz.lag_igraph import lag_graf
@@ -29,12 +29,12 @@ def od_cost_matrix(G,
                                                                   sluttpunkter)
         
     # så loop nettverksberegningen for hver kostnad (hvis flere)
-    kostnader = G.kostnad
-    if isinstance(kostnader, str):
-         kostnader = [kostnader]
+    kostnadene = G.kostnad
+    if isinstance(kostnadene, str):
+         kostnadene = [kostnadene]
 
     out = []
-    for kostnad in kostnader:
+    for kostnad in kostnadene:
                 
         G2, startpunkter, sluttpunkter = lag_graf(G,
                                                   kostnad,
@@ -48,7 +48,6 @@ def od_cost_matrix(G,
                                     source = startpunkter["nz_idx"],
                                     target = sluttpunkter["nz_idx"])
             
-            # lag lister med avstander og id-er
             fra_idx, til_idx, kostnader = [], [], []
             for i, f_idx in enumerate(startpunkter["nz_idx"]):
                 for ii, t_idx in enumerate(sluttpunkter["nz_idx"]):
@@ -104,17 +103,22 @@ def od_cost_matrix(G,
         out = out.loc[~out[kostnad1].isna()]
         out = out.loc[out.groupby('fra')[kostnad1].idxmin()].reset_index(drop=True)
 
+    # 
+    wkt_dict_start = {idd: geom.wkt for idd, geom in zip(startpunkter["nz_idx"], startpunkter.geometry)}
+    wkt_dict_slutt = {idd: geom.wkt for idd, geom in zip(sluttpunkter["nz_idx"], sluttpunkter.geometry)}
+    out["wkt_fra"] = out["fra"].map(wkt_dict_start)
+    out["wkt_til"] = out["til"].map(wkt_dict_slutt)
+    for kostnad in kostnadene:
+        out[kostnad] = [0 if fra==til else out[kostnad].iloc[i] for i, (fra, til) in enumerate(zip(out.wkt_fra, out.wkt_til))]
+
     # lag linjer mellom start og slutt
-    if linjer:        
-        wkt_dict_start = {idd: geom.wkt for idd, geom in zip(startpunkter["nz_idx"], startpunkter.geometry)}
-        wkt_dict_slutt = {idd: geom.wkt for idd, geom in zip(sluttpunkter["nz_idx"], sluttpunkter.geometry)}
-        out["wkt_fra"] = out["fra"].map(wkt_dict_start)
-        out["wkt_til"] = out["til"].map(wkt_dict_slutt)
+    if linjer:           
         fra = pygeos.from_shapely(gpd.GeoSeries.from_wkt(out["wkt_fra"], crs=25833))
         til =  pygeos.from_shapely(gpd.GeoSeries.from_wkt(out["wkt_til"], crs=25833))
         out["geometry"] = pygeos.shortest_line(fra, til)
         out = gpd.GeoDataFrame(out, geometry="geometry", crs=25833)
-        out = out.drop(["wkt_fra", "wkt_til"], axis=1, errors="ignore")
+    
+    out = out.drop(["wkt_fra", "wkt_til"], axis=1, errors="ignore")
         
     # få tilbake opprinnelige id-er
     out = map_ids(out, id_kolonner, startpunkter, sluttpunkter)
