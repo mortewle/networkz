@@ -146,7 +146,7 @@ class Graf:
         self.nettverk = self.filtrer_nettverk()
         self.nettverk, self._noder = lag_node_ids(self.nettverk)
  
-        return od_cost_matrix(self, startpunkter, sluttpunkter, id_kolonne, linjer, radvis, cutoff, destination_count)
+        return od_cost_matrix(self, startpunkter=startpunkter, sluttpunkter=sluttpunkter, id_kolonne=id_kolonne, linjer=linjer, radvis=radvis, cutoff=cutoff, destination_count=destination_count)
 
 
     def service_area(self,
@@ -161,7 +161,7 @@ class Graf:
         if not isinstance(self.kostnad, str):
             raise ValueError("Kan bare ha én kostnad (str) i shortest_path")
         
-        return service_area(self, startpunkter, impedance, id_kolonne)
+        return service_area(self, startpunkter=startpunkter, impedance=impedance, id_kolonne=id_kolonne)
 
 
     def shortest_path(self,
@@ -170,7 +170,8 @@ class Graf:
                         id_kolonne = None,
                         cutoff: int = None,
                         destination_count: int = None,
-                        radvis = False
+                        radvis = False,
+                        tell_opp = False,
                         ):
 
         self.nettverk = self.filtrer_nettverk()
@@ -179,7 +180,7 @@ class Graf:
         if not isinstance(self.kostnad, str):
             raise ValueError("Kan bare ha én kostnad (str) i shortest_path")
         
-        return shortest_path(self, startpunkter, sluttpunkter, id_kolonne, cutoff, destination_count, radvis)
+        return shortest_path(self, startpunkter=startpunkter, sluttpunkter=sluttpunkter, id_kolonne=id_kolonne, cutoff=cutoff, destination_count=destination_count, radvis=radvis, tell_opp=tell_opp)
     
     
     def hent_nettverk(self) -> gpd.GeoDataFrame:
