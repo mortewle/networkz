@@ -1,10 +1,10 @@
 import numpy as np
 import pandas as pd
 import geopandas as gpd
-import pygeos #shapely
-from networkz.hjelpefunksjoner import fjern_tomme_geometrier, gdf_concat
+import shapely
 from sklearn.neighbors import NearestNeighbors
-  
+from networkz.hjelpefunksjoner import fjern_tomme_geometrier, gdf_concat
+
 
 # funksjon som tilpasser vegnettet til classen Graf().
 def lag_nettverk(veger,
@@ -57,8 +57,7 @@ def lag_nettverk(veger,
     
     # fra multilinestring til linestring. Og fjerne z-koordinat fordi de ikke trengs
     veger_kopi = fjern_tomme_geometrier(veger_kopi)
-#    veger_kopi["geometry"] = shapely.line_merge(shapely.force_2d(veger_kopi.geometry)) 
-    veger_kopi["geometry"] = pygeos.line_merge(pygeos.force_2d(pygeos.from_shapely(veger_kopi.geometry)))   
+    veger_kopi["geometry"] = shapely.line_merge(shapely.force_2d(veger_kopi.geometry)) 
     
     assert len(veger_kopi)>0
 
@@ -66,7 +65,7 @@ def lag_nettverk(veger,
     n = len(veger_kopi)
     veger_kopi = veger_kopi.explode(ignore_index=True)
     if len(veger_kopi)<n:
-        print(f"Advarsel: {len(veger_kopi)-n} multigeometrier ble splittet. Minutt-kostnader blir feil for disse.")
+        print(f"Advarsel: {n-len(veger_kopi)} multigeometrier ble splittet. Minutt-kostnader blir feil for disse.")
         #TODO: lag ny minutt-kolonne manuelt
     
     if finn_isolerte:
@@ -200,11 +199,11 @@ def koor_kat(gdf,
 
 
 def finn_isolerte_nettverk(veger, lengde: int, ruteloop_m: int):
+    
     """ Gir vegdataene kolonnen 'isolert', hvor 0 betyr ikke isolert, og andre tall betyr størrelsen på det isolerte nettverket i meter.
     Finner de isolerte ved å bufre 0.001 meter, dissolve og explode (til singlepart). 
     Dette gjøres i loop for en rute av gangen, hvor index-verdier (idx) under angitt lengde lagres i tuple (fordi det tar mindre plass enn lister).
-    Så gjentas loopen pga grensetilfeller basert på ruter som er halvveis forskjøvet. idx-er som er med i begge loop-runder, anses som isolerte.
-    """
+    Så gjentas loopen pga grensetilfeller basert på ruter som er halvveis forskjøvet. idx-er som er med i begge loop-runder, anses som isolerte. """
     
     # gir vegdataene to kolonner med koordinatkategorier. Den andre kolonnen inneholder rutekategorier som er halvveis forskøvet
     veger = koor_kat(veger, meter = ruteloop_m, x2 = True)
@@ -258,7 +257,8 @@ def finn_isolerte_nettverk(veger, lengde: int, ruteloop_m: int):
     
     
 def tett_nettverkshull(noder, veger, avstand, crs=25833):
-    """ Lager rette linjer mellom små hull i nettverket."""
+    
+    """ Lager rette linjer der det er små hull i nettverket."""
         
     blindveger = noder[noder["n"] <= 1]
     blindveger = blindveger.reset_index(drop=True)
@@ -285,10 +285,10 @@ def tett_nettverkshull(noder, veger, avstand, crs=25833):
                             if dist < avstand and dist > 0])
 
     # lag GeoDataFrame med rette linjer
-    fra =  pygeos.from_shapely(gpd.GeoSeries.from_wkt(fra, crs=crs))
-    til =  pygeos.from_shapely(gpd.GeoSeries.from_wkt(til, crs=crs))
+    fra =  gpd.GeoSeries.from_wkt(fra, crs=crs)
+    til =  gpd.GeoSeries.from_wkt(til, crs=crs)
     nye_lenker = pd.DataFrame()
-    nye_lenker["geometry"] = pygeos.shortest_line(fra, til)
+    nye_lenker["geometry"] = shapely.shortest_line(fra, til)
     nye_lenker = gpd.GeoDataFrame(nye_lenker, geometry="geometry", crs=crs)
     
     # lag alle de andre kolonnene
@@ -368,8 +368,7 @@ def lag_turn_restrictions(veger, turn_restrictions):
     # smelt lenkeparene sammen
     dobbellenker["minutter"] = dobbellenker["minutter1"] + dobbellenker["minutter2"]
     dobbellenker["meter"] = dobbellenker["meter1"] + dobbellenker["meter2"]
-#    dobbellenker["geometry"] = shapely.line_merge(shapely.union(dobbellenker.geom1, dobbellenker.geom2))
-    dobbellenker["geometry"] = pygeos.line_merge(pygeos.union(pygeos.from_shapely(dobbellenker.geom1), pygeos.from_shapely(dobbellenker.geom2)))
+    dobbellenker["geometry"] = shapely.line_merge(shapely.union(dobbellenker.geom1, dobbellenker.geom2))
     dobbellenker = gpd.GeoDataFrame(dobbellenker, geometry = "geometry", crs = 25833)
     dobbellenker["turn_restriction"] = True
     
