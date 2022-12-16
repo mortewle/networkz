@@ -3,15 +3,15 @@ import igraph
 from sklearn.neighbors import NearestNeighbors
 
 
-def m_til_min(x, G):
-    """ 
-    gjør om meter til minutter for lenkene mellom punktene og nabonodene.
+def m_til_min(x, fart):
+    """ Gjør om meter til minutter for lenkene mellom punktene og nabonodene.
     ganger luftlinjeavstanden med 1.5 siden det alltid er svinger i Norge. """
     
-    return (x * 1.5) / (16.666667 * G.kost_til_nodene)
+    return (x * 1.5) / (16.666667 * fart)
 
 
 def dist_faktor_avstand(dist_min: int, dist_faktor: int) -> int: 
+    
     """ Finner terskelavstanden for lagingen av lenker mellom start- og sluttpunktene og nodene. Alle noder innenfor denne avstanden kobles med punktene.
     Terskelen er avstanden fra hvert punkt til nærmeste node pluss x prosent pluss x meter, hvor x==dist_faktor.
     Så hvis dist_faktor=10 og avstanden til node er 100, blir terskelen 120 meter (100*1.10 + 10). """
@@ -19,13 +19,9 @@ def dist_faktor_avstand(dist_min: int, dist_faktor: int) -> int:
     return (dist_min * (1 + dist_faktor/100) + dist_faktor)
 
 
-# lager igraph-graf som inkluderer lenker til/fra start-/sluttpunktene
-def lag_graf(G,
-             kostnad,
-             startpunkter,
-             sluttpunkter=None
-             ):
-                 
+def lag_graf(G, kostnad, startpunkter, sluttpunkter=None):
+    """ Lager igraph.Graph som inkluderer lenker til/fra start-/sluttpunktene. """
+    
     # alle lenkene og kostnadene i nettverket
     edges = [(str(fra), str(til)) for fra, til in zip(G.nettverk["source"], G.nettverk["target"])]
     kostnader = list(G.nettverk[kostnad])
@@ -42,11 +38,10 @@ def lag_graf(G,
     if G.kost_til_nodene==0:
         avstander_start = [0 for _ in avstander_start]
     elif kostnad=="minutter":
-        avstander_start = [m_til_min(x, G) for x in avstander_start]
+        avstander_start = [m_til_min(x, G.kost_til_nodene) for x in avstander_start]
     elif kostnad=="meter":
         avstander_start = [x*1.5 for x in avstander_start]
         
-    
     edges = edges + edges_start
     kostnader = kostnader + avstander_start
     
@@ -60,7 +55,7 @@ def lag_graf(G,
         if G.kost_til_nodene==0:
             avstander_slutt = [0 for _ in avstander_slutt]
         elif kostnad=="minutter":
-            avstander_slutt = [m_til_min(x, G) for x in avstander_slutt]
+            avstander_slutt = [m_til_min(x, G.kost_til_nodene) for x in avstander_slutt]
         elif kostnad=="meter":
             avstander_slutt = [x*1.5 for x in avstander_slutt]
             
@@ -79,12 +74,10 @@ def lag_graf(G,
 
 def avstand_til_noder(punkter, G, hva):
         
-    """
-    Her finner man avstanden til de n nærmeste nodene for hvert start-/sluttpunkt.
+    """ Her finner man avstanden til de n nærmeste nodene for hvert start-/sluttpunkt.
     Gjør om punktene og nodene til 1d numpy arrays bestående av koordinat-tuples
     sklearn kneighbors returnerer 2d numpy arrays med avstander og tilhørende indexer fra node-arrayen
-    Derfor må node_id-kolonnen være identisk med index, altså gå fra 0 og oppover uten mellomrom
-    """
+    Derfor må node_id-kolonnen være identisk med index, altså gå fra 0 og oppover uten mellomrom. """
     
     noder = G.noder
     
