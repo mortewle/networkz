@@ -1,5 +1,5 @@
 
-__version__ = "0.2.0"
+__version__ = "0.1.1"
 
 # sjekk om manglende dependencies (kopiert fra pandas' __init__)
 _hard_dependencies = ("numpy", "pandas", "geopandas", "igraph", "sklearn")
@@ -15,7 +15,7 @@ del _hard_dependencies, _dependency, _missing_dependencies
 
 from networkz.grafclass import Graf
 
-from networkz.nettverk import lag_nettverk, finn_isolerte_nettverk, koor_kat, tett_nettverkshull, lag_node_ids, lag_turn_restrictions
+from networkz.nettverk import lag_nettverk, finn_isolerte_nettverk, gridish, tett_nettverkshull, lag_node_ids, lag_turn_restrictions, tilpass_veger_sykkelfot
 
 from networkz.service_area import service_area
 
