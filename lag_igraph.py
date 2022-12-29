@@ -3,37 +3,40 @@ import igraph
 from sklearn.neighbors import NearestNeighbors
 
 
-def m_til_min(x, fart):
-    """ Gjør om meter til minutter for lenkene mellom punktene og nabonodene.
+def m_til_min(meter, fart):
+    """ 
+    Gjør om meter til minutter for lenkene mellom punktene og nabonodene.
     ganger luftlinjeavstanden med 1.5 siden det alltid er svinger i Norge. """
     
-    return (x * 1.5) / (16.666667 * fart)
+    return (meter * 1.5) / (16.666667 * fart)
 
 
 def dist_faktor_avstand(dist_min: int, dist_faktor: int) -> int: 
-    
-    """ Finner terskelavstanden for lagingen av lenker mellom start- og sluttpunktene og nodene. Alle noder innenfor denne avstanden kobles med punktene.
+    """ 
+    Finner terskelavstanden for lagingen av lenker mellom start- og sluttpunktene og nodene. Alle noder innenfor denne avstanden kobles med punktene.
     Terskelen er avstanden fra hvert punkt til nærmeste node pluss x prosent pluss x meter, hvor x==dist_faktor.
     Så hvis dist_faktor=10 og avstanden til node er 100, blir terskelen 120 meter (100*1.10 + 10). """
     
     return (dist_min * (1 + dist_faktor/100) + dist_faktor)
 
 
-def lag_graf(G, kostnad, startpunkter, sluttpunkter=None):
-    """ Lager igraph.Graph som inkluderer lenker til/fra start-/sluttpunktene. """
+def lag_graf(G, kostnad, # kostnad er eget parameter siden od_cost_matrix looper gjennom kostnadene.
+             startpunkter, sluttpunkter=None):
+    """ 
+    Lager igraph.Graph som inkluderer lenker til/fra start-/sluttpunktene. """
     
     # alle lenkene og kostnadene i nettverket
     edges = [(str(fra), str(til)) for fra, til in zip(G.nettverk["source"], G.nettverk["target"])]
     kostnader = list(G.nettverk[kostnad])
-
+        
     # lenker mellom startpunktene og nærmeste noder
     edges_start, avstander_start, startpunkter = avstand_til_noder(startpunkter, 
                                                                    G, 
                                                                    hva = "start")
-    
+        
     if len(startpunkter)==0:
         raise ValueError("Ingen startpunkter innen search_tolerance")
-
+    
     # omkod meter til minutter
     if G.kost_til_nodene==0:
         avstander_start = [0 for _ in avstander_start]
@@ -41,14 +44,14 @@ def lag_graf(G, kostnad, startpunkter, sluttpunkter=None):
         avstander_start = [m_til_min(x, G.kost_til_nodene) for x in avstander_start]
     elif kostnad=="meter":
         avstander_start = [x*1.5 for x in avstander_start]
-        
+    
     edges = edges + edges_start
     kostnader = kostnader + avstander_start
     
     # samme for sluttpunktene
     if sluttpunkter is not None:
         edges_slutt, avstander_slutt, sluttpunkter = avstand_til_noder(sluttpunkter, G, hva = "slutt")
-
+    
         if len(sluttpunkter)==0:
             raise ValueError("Ingen sluttpunkter innen search_tolerance")
         
@@ -61,11 +64,11 @@ def lag_graf(G, kostnad, startpunkter, sluttpunkter=None):
             
         edges = edges + edges_slutt
         kostnader = kostnader + avstander_slutt
-    
-    # lag liste med tuples med lenker og legg dem til i grafen 
+
+    # lag liste med tuples med lenker og legg dem til i grafen
     G2 = igraph.Graph.TupleList(edges, directed=G.directed)
     G2.es['weight'] = kostnader
-
+        
     if sluttpunkter is None:
         return G2, startpunkter
 
@@ -73,8 +76,8 @@ def lag_graf(G, kostnad, startpunkter, sluttpunkter=None):
 
 
 def avstand_til_noder(punkter, G, hva):
-        
-    """ Her finner man avstanden til de n nærmeste nodene for hvert start-/sluttpunkt.
+    """ 
+    Her finner man avstanden til de n nærmeste nodene for hvert start-/sluttpunkt.
     Gjør om punktene og nodene til 1d numpy arrays bestående av koordinat-tuples
     sklearn kneighbors returnerer 2d numpy arrays med avstander og tilhørende indexer fra node-arrayen
     Derfor må node_id-kolonnen være identisk med index, altså gå fra 0 og oppover uten mellomrom. """
@@ -114,9 +117,9 @@ def avstand_til_noder(punkter, G, hva):
     avstander = avstander[avstander != 0]
     punkter = punkter[punkter.dist_node <= G.search_tolerance]
     
-    edges = list(edges)
-    avstander = list(avstander)
-
+    edges = [tuple(arr) for arr in edges]
+    avstander = [arr for arr in avstander]
+    
     if hva=="start":
         punkter = punkter.rename(columns={"dist_node": "dist_node_start"})
     else:
