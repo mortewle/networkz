@@ -1,4 +1,5 @@
 import geopandas as gpd
+import numpy as np
 from dataclasses import dataclass
 from copy import copy, deepcopy
 
@@ -7,6 +8,7 @@ from networkz.shortest_path import shortest_path
 from networkz.service_area import service_area
 from networkz.nettverk import lag_node_ids
 from networkz.hjelpefunksjoner import read_geopandas
+from networkz.lag_igraph import m_til_min
 
 
 # årene det ligger tilrettelagte vegnettverk på Dapla.
@@ -27,23 +29,24 @@ Reglene (parametrene) kan settes i Graf(). """
 
 @dataclass
 class ReglerFot:
-    directed: bool = False
     fart: int = 5
-    nettverkssti: str = NETTVERKSSTI_SYKKELFOT
+    prosent_straff_stigning: int = 5
     max_aadt: int = None
     max_fartsgrense: int = None
-
+    forbudte_vegtyper: tuple = ("Sykkelfelt", "Sykkelveg")
+    nettverkssti: str = NETTVERKSSTI_SYKKELFOT
+    
 @dataclass
 class ReglerSykkel:
-    directed: bool = True
     fart: int = 20
-    nettverkssti: str = NETTVERKSSTI_SYKKELFOT
+    prosent_straff_stigning: int = 23
     max_aadt: int = None
     max_fartsgrense: int = None
+    forbudte_vegtyper: tuple = ("Fortau", "Sti", "Stor sti", "Gangveg", "Gangfelt") # det er jo egentlig ikke forbudt å sykle her...
+    nettverkssti: str = NETTVERKSSTI_SYKKELFOT
 
 @dataclass
 class ReglerBil:
-    directed: bool = True
     turn_restrictions: bool = False # svingforbud. midlr false
     sperring: str = "ERFKPS" # hvilke vegkategorier hvor vegbommer skal være til hinder. Hvis sperring er None, er alle bommer lov. Hvis sperring=='ERFKS', er det lov å kjøre gjennom private bommer.    
     nettverkssti: str = NETTVERKSSTI_BIL
@@ -65,6 +68,7 @@ class Graf:
                  nettverk: gpd.GeoDataFrame = None, 
                  
                  # generelle regler for nettverksanalysen
+                 directed = True,
                  kostnad = "minutter",
                  fjern_isolerte = True, 
                  search_tolerance = 1000,
@@ -100,8 +104,9 @@ class Graf:
             self.regler = ReglerFot(**qwargs)
         else:
             raise ValueError("kjortetoy må være bil, sykkel eller fot.")
-            
-        self._kostnad = kostnad        
+        
+        self.directed = directed
+        self._kostnad = kostnad
         self.search_tolerance = search_tolerance if search_tolerance else 100000000
         self.dist_faktor = dist_faktor
         self.kost_til_nodene = kost_til_nodene if kost_til_nodene else 0
@@ -118,7 +123,11 @@ class Graf:
         self.nettverk, self._noder = lag_node_ids(self.nettverk)
         
         if self._kjoretoy != "bil":
-            self.nettverk["minutter"] = self.nettverk.length / (self.fart * 16.666667)
+            if "stigningsprosent" in self.nettverk.columns:
+                self.nettverk["minutter"] = self.beregn_minutter_stigning()
+            else:
+                self.nettverk["minutter"] = self.nettverk.length / (self.fart * 16.666667)
+                
             
         self._kostnad = self.sjekk_kostnad(kostnad)
         
@@ -131,7 +140,7 @@ class Graf:
 
             if not "turn_restriction" in self.nettverk.columns:
                 self.turn_restrictions = False
-                   
+                     
     
     def od_cost_matrix(self, 
                         startpunkter: gpd.GeoDataFrame, 
@@ -222,14 +231,32 @@ class Graf:
 
             if self.sperring:
                 self.nettverk = self.sett_opp_sperringer()
-            
+        
+        if self.kjoretoy!="bil":
+            self.nettverk = self.nettverk[~self.nettverk.typeveg.isin(self.forbudte_vegtyper)]
+    
         if self.fjern_isolerte:
             self.nettverk = self.nettverk[self.nettverk["isolert"].fillna(0) == 0]
                 
         if len(self.nettverk)==0:
-            raise ValueError("Nettverket har 0 rader")      
+            raise ValueError("Nettverket har 0 rader")
         
         return self.nettverk
+    
+    
+    def beregn_minutter_stigning(self):
+    
+        minutter = self.nettverk.length / (self.fart * 16.666667)
+        
+        gange_med = 1 + (self.prosent_straff_stigning * self.nettverk["stigningsprosent"].fillna(0))/100
+        dele_paa = 1 + (self.prosent_straff_stigning * np.log(1 + abs(self.nettverk["stigningsprosent"].fillna(0))))/100
+        
+        minutter_stigningsjustert = np.where(self.nettverk["stigningsprosent"].fillna(0) > 0,
+                                             minutter * gange_med,
+                                             minutter / dele_paa
+                                             )
+        
+        return minutter_stigningsjustert
     
     
     def sett_opp_sperringer(self) -> gpd.GeoDataFrame:
