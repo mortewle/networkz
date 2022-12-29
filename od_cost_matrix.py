@@ -40,7 +40,7 @@ def od_cost_matrix(G,
                                                   kostnad,
                                                   startpunkter, 
                                                   sluttpunkter)
-        
+
         if not radvis:
             
             # selve avstandsberegningen her:
@@ -64,7 +64,7 @@ def od_cost_matrix(G,
                 fra_idx.append(f_idx)
                 til_idx.append(t_idx)
                 kostnader.append(resultat[0][0])
-        
+                
         df = pd.DataFrame(data = {"fra": fra_idx, "til": til_idx, kostnad: kostnader})
 
         # litt opprydning
@@ -79,7 +79,7 @@ def od_cost_matrix(G,
     # samle resultatene for ulike kostnader, med fra og til som index
     out = pd.concat([df.set_index(["fra", "til"]) for df in out], ignore_index=False, axis=1)
     out = out.reset_index()
-
+        
     # gi dataene kolonner med avstand til nærmeste node
     startpunkter = startpunkter.loc[:, ~startpunkter.columns.duplicated()]
     sluttpunkter = sluttpunkter.loc[:, ~sluttpunkter.columns.duplicated()]
@@ -89,7 +89,7 @@ def od_cost_matrix(G,
            .merge(sluttpunkter[["dist_node_slutt", "nz_idx"]], left_on="til", right_on="nz_idx", how="left")
            .drop("nz_idx", axis=1)
     )
-
+    
     # hvis cutoff og/eller destination_count er True, brukes første kostnad i filtreringen
     if isinstance(G.kostnad, str):
         kostnad1 = G.kostnad
