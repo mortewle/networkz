@@ -18,13 +18,14 @@ def lag_nettverk(veger,
                  finn_isolerte = True,
                  utvid: int = None, # meter
                  turn_restrictions = None,
+                 stigningsprosent = False,
                  behold_kolonner: list = None
                  ):
     
     if behold_kolonner:
         if isinstance(behold_kolonner, str):
             behold_kolonner = [behold_kolonner]
-        assert isinstance(behold_kolonner, (list, tuple)), "'behold_kolonner' må være en liste/tuple med kolonnenavn."
+        assert isinstance(behold_kolonner, (list, tuple)), "'behold_kolonner' må være string/liste/tuple med kolonnenavn."
     else:
         behold_kolonner = []
     
@@ -57,9 +58,9 @@ def lag_nettverk(veger,
     
     # fra multilinestring til linestring. Og fjerne z-koordinat fordi de ikke trengs
     veger_kopi = fjern_tomme_geometrier(veger_kopi)
-    veger_kopi["geometry"] = shapely.line_merge(shapely.force_2d(veger_kopi.geometry)) 
+    veger_kopi["geometry"] = shapely.line_merge(veger_kopi.geometry)
     
-    assert len(veger_kopi)>0
+    assert len(veger_kopi), "vegene har 0 rader"
 
     #hvis noen lenker fortsatt er multilinestrings, må de splittes for å ikke ha flere enn to ytterpunkter snart
     n = len(veger_kopi)
@@ -82,7 +83,7 @@ def lag_nettverk(veger,
     sirkler = ytterpunkter.loc[ytterpunkter.is_empty, "idx"] #sirkler har tom boundary
     veger_kopi = veger_kopi[~veger_kopi.idx.isin(sirkler)]
     
-    assert len(veger_kopi)>0
+    assert len(veger_kopi), "vegene har 0 rader"
 
     """
     while np.max(veger_edges.length) > 1001:
@@ -99,19 +100,27 @@ def lag_nettverk(veger,
     ytterpunkter = veger_kopi.geometry.boundary.explode(ignore_index=True) # boundary gir multipunkt med to ytterpunkter for hver linje, og explode() (til singlepart) gir en dobbelt så lang tabell med enkeltpunkter
     wkt_geom = [f"POINT ({x} {y})" for x, y in zip(ytterpunkter.x, ytterpunkter.y)]
     veger_kopi["source_wkt"], veger_kopi["target_wkt"] = wkt_geom[0::2], wkt_geom[1::2] # gjør annenhvert ytterpunkt til source_wkt og target_wkt
+    
+    if stigningsprosent:
+        assert all(ytterpunkter.has_z), "Vegdataene må ha z-koordinater for å kunne beregne stigning."
+        hoyde = [z for z in ytterpunkter.geometry.z]
+        veger_kopi["hoyde_source"], veger_kopi["hoyde_target"] = hoyde[0::2], hoyde[1::2]
+        veger_kopi["stigningsprosent"] = (veger_kopi.hoyde_target - veger_kopi.hoyde_source) / veger_kopi.length * 100
+        veger_kopi.loc[(veger_kopi.stigningsprosent>100) | (veger_kopi.stigningsprosent<-100), "stigningsprosent"] = 0
+        behold_kolonner = behold_kolonner + ["stigningsprosent"]
+
+    veger_kopi["geometry"] = shapely.force_2d(veger_kopi.geometry)
 
     if not directed or all(veger_kopi["oneway"].isna()):
         veger_edges = veger_kopi.copy()
         veger_edges["minutter"] = np.where(veger_edges["drivetime_fw"].fillna(0) > 0,
                                            veger_edges["drivetime_fw"], 
-                                           veger_edges["drivetime_bw"]) 
-        assert len(veger_edges)>0
-
+                                           veger_edges["drivetime_bw"])
     else:
         #velg ut de enveiskjørte og snu source og target for lenkene som går "feil" vei
         ft = veger_kopi.loc[(veger_kopi.oneway=="FT") | (veger_kopi.oneway=="F")] 
         tf = veger_kopi.loc[(veger_kopi.oneway=="TF") | (veger_kopi.oneway=="T")]
-        tf = tf.rename(columns={"source": "target", "target": "source", "source_wkt": "target_wkt", "target_wkt": "source_wkt"})       
+        tf = tf.rename(columns={"source": "target", "target": "source", "source_wkt": "target_wkt", "target_wkt": "source_wkt"})           
         
         #dupliser lenkene som går begge veier og snu source og target i den ene
         begge_retninger1 = veger_kopi[veger_kopi.oneway=="B"]
@@ -124,6 +133,10 @@ def lag_nettverk(veger,
         ft = ft.rename(columns={"drivetime_fw": "minutter"})
         tf = tf.rename(columns={"drivetime_bw": "minutter"})
 
+        if stigningsprosent:
+            tf["stigningsprosent"] = tf["stigningsprosent"] * -1
+            begge_retninger2["stigningsprosent"] = begge_retninger2["stigningsprosent"] * -1
+            
         # oneway=="N" er sperringer fram til og med 2021
         n = veger_kopi[(veger_kopi.oneway=="N")]
         if len(n)>0:
@@ -135,7 +148,7 @@ def lag_nettverk(veger,
         else:
             veger_edges = gdf_concat([begge_retninger1, begge_retninger2, ft, tf])
     
-        assert len(veger_edges)>0
+    assert len(veger_edges), "vegene har 0 rader"
 
     if turn_restrictions:
         veger_edges = lag_turn_restrictions(veger_edges, turn_restrictions)
@@ -154,7 +167,8 @@ def lag_nettverk(veger,
     veger_edges["meter"] = veger_edges.length
 
     veger_edges = veger_edges.loc[(veger_edges.minutter > 0) | (veger_edges.minutter.isna()),
-                                  ["source", "target", "minutter", "meter", "turn_restriction", "oneway", "sperring", vegkategori, "isolert", "KOMMUNENR", "source_wkt", "target_wkt", "geometry"] + behold_kolonner]
+                                  ["source", "target", "minutter", "meter", "turn_restriction", "oneway", "sperring", vegkategori, "isolert", "KOMMUNENR", 
+                                   "source_wkt", "target_wkt", "geometry"] + behold_kolonner]
     
     # fjern kolonner som ikke ble brukt        
     for col in ["minutter", "turn_restriction", "isolert", vegkategori, "sperring", "KOMMUNENR", "oneway"]:
@@ -164,101 +178,112 @@ def lag_nettverk(veger,
     return veger_edges
 
 
-# looping er treigt, men buffer+dissolve for store områder er mye treigere. 
-# "deler" derfor dataene i ruter ved å gi kolonner koordinat-kategorier
-def koor_kat(gdf, 
-             meter, # minst mulig ruter er ikke alltid raskest. Varierer med hvor tunge dataene er.
-             x2 = False # x2=True gir en kolonne til med ruter 1/2 hakk nedover og bortover. Hvis grensetilfeller er viktig
-             ):
+def tilpass_veger_sykkelfot(veger):
+    veger = veger.loc[veger.sykkelforbud != "Ja"]
+    veger = veger.rename(columns={"trafikkretning": "oneway"})
+    veger["oneway"] = veger.oneway.map({"MED": "FT", "MOT": "TF", "BEGGE": "B"})
+    return veger
+
+
+def gridish(gdf, meter, x2 = False):
+    """
+    Gir dataene kolonne med avrundede xy-koordinater. Rundes av til valgfritt antall meter.
+    Hvis dataene er for tunge og man ikke har en kommunekolonne e.l. som gjør det enkelt å dele opp.
+    x2=True gir en kolonne til med ruter 1/2 hakk nedover og bortover. Hvis grensetilfeller er viktig, kan man loope en gang per rutekategorikolonne. """
     
     # rund ned koordinatene og sett sammen til kolonne
-    gdf["koor_kat"] = round(gdf.geometry.bounds.minx/meter,1).astype(int).astype(str) + "_" + round(gdf.geometry.bounds.miny/meter,1).astype(int).astype(str)
+    gdf["gridish"] = round(gdf.geometry.bounds.minx/meter,1).astype(int).astype(str) + "_" + round(gdf.geometry.bounds.miny/meter,1).astype(int).astype(str)
     
     if x2:
 
-        gdf["koor_kat_x"] = gdf.geometry.bounds.minx / meter
+        gdf["gridish_x"] = gdf.geometry.bounds.minx / meter
         
-        unike_x = gdf["koor_kat_x"].astype(int).unique()
+        unike_x = gdf["gridish_x"].astype(int).unique()
         unike_x.sort()
         
         for x in unike_x:
-            gdf.loc[(gdf["koor_kat_x"] >= x-0.5) & (gdf["koor_kat_x"] < x+0.5), "koor_kat_x2"] = x+0.5
+            gdf.loc[(gdf["gridish_x"] >= x-0.5) & (gdf["gridish_x"] < x+0.5), "gridish_x2"] = x+0.5
 
         # samme for y
-        gdf["koor_kat_y"] = gdf.geometry.bounds.miny/meter
-        unike_y = gdf["koor_kat_y"].astype(int).unique()
+        gdf["gridish_y"] = gdf.geometry.bounds.miny/meter
+        unike_y = gdf["gridish_y"].astype(int).unique()
         unike_y.sort()
         for y in unike_y:
-            gdf.loc[(gdf["koor_kat_y"] >= y-0.5) & (gdf["koor_kat_y"] < y+0.5), "koor_kat_y2"] = y+0.5
+            gdf.loc[(gdf["gridish_y"] >= y-0.5) & (gdf["gridish_y"] < y+0.5), "gridish_y2"] = y+0.5
 
-        gdf["koor_kat2"] = gdf["koor_kat_x2"].astype(str) + "_" + gdf["koor_kat_y2"].astype(str)
+        gdf["gridish2"] = gdf["gridish_x2"].astype(str) + "_" + gdf["gridish_y2"].astype(str)
 
-        gdf = gdf.drop(["koor_kat_x","koor_kat_y","koor_kat_x2","koor_kat_y2"], axis=1)
+        gdf = gdf.drop(["gridish_x","gridish_y","gridish_x2","gridish_y2"], axis=1)
         
     return gdf
 
 
 def finn_isolerte_nettverk(veger, lengde: int, ruteloop_m: int):
-    
-    """ Gir vegdataene kolonnen 'isolert', hvor 0 betyr ikke isolert, og andre tall betyr størrelsen på det isolerte nettverket i meter.
+    """ 
+    Gir vegdataene kolonnen 'isolert', hvor 1 betyr 'isolert'.
     Finner de isolerte ved å bufre 0.001 meter, dissolve og explode (til singlepart). 
-    Dette gjøres i loop for en rute av gangen, hvor index-verdier (idx) under angitt lengde lagres i tuple (fordi det tar mindre plass enn lister).
-    Så gjentas loopen pga grensetilfeller basert på ruter som er halvveis forskjøvet. idx-er som er med i begge loop-runder, anses som isolerte. """
+    Dette er tungt, og gjøres derfor i loop for et lite område av gangen. 
+    Så gjentas loopen for områder som er halvveis forskjøvet på grunn av grensetilfeller. 
+    Vegene som er med i begge loops, anses som isolerte. 
+    Veg-indeksene (idx) lagres i tuple fordi det tar mindre plass enn lister.
+    """
     
     # gir vegdataene to kolonner med koordinatkategorier. Den andre kolonnen inneholder rutekategorier som er halvveis forskøvet
-    veger = koor_kat(veger, meter = ruteloop_m, x2 = True)
+    veger = gridish(veger, meter = ruteloop_m, x2 = True)
     
+    # fjerner sperringer før beregningen
     if "sperring" in veger.columns:
         ikke_sperringer = veger[veger.sperring.astype(int) != 1]
         sperringer = veger[veger.sperring.astype(int) == 1]
     else:
         ikke_sperringer = veger.copy()
         sperringer = veger.copy()
+    
+    # buffer, dissolve og explode for hver rute
+    def buffdissexp_gridish_loop(veger, sperringer, lengde, kolonne):
         
-    def kat_loop(veger, sperringer, kolonne):
         kanskje_isolerte = ()
-        storrelsene = ()
-        for kat in veger[kolonne].unique():
-            sperringene = sperringer.loc[sperringer[kolonne] == kat, ["geometry", "idx"]]
-            vegene = veger.loc[veger[kolonne] == kat, ["geometry"]]
-            vegene["geometry"] = vegene.buffer(0.001, resolution = 1) # lavest mulig resolution for å få det fort
+        for i in veger[kolonne].unique():
+            
+            vegene = veger.loc[veger[kolonne] == i, ["geometry", "idx"]]
+            sperringene = sperringer.loc[sperringer[kolonne] == i, ["geometry", "idx"]]
+            
+            vegene["geometry"] = vegene.buffer(0.001, resolution = 1) # lavest mulig oppløsning for å få det fort
             dissolvet = vegene.dissolve()
-            sum_lengde = dissolvet.length.sum()
             singlepart = dissolvet.explode(ignore_index=True)
-            singlepart["utstrekning"] = singlepart.convex_hull.area
+            
+            # velger nettverk under gitt lengde - hvis de er under halvparten av total lengde og mindre utstrekning enn total lengde
+            sum_lengde = dissolvet.length.sum()
+            singlepart["utstrekning"] = singlepart.convex_hull.area # fordi noen lange, isolerte veger, gjerne i skogen, kan være brukbare for turer i skogen.
             lite_nettverk = singlepart[(singlepart.length < lengde*2) & 
                                        (singlepart.length < sum_lengde*0.5) &
-                                       (singlepart["utstrekning"] < sum_lengde)
-                                       ]
+                                       (singlepart["utstrekning"] < sum_lengde) ]
+            
+            # legg til nye idx-er i tuple-en med kanskje isolerte nettverk.
             for geom in lite_nettverk.geometry:
-                nye_kanskje_isolerte =  tuple(veger.loc[veger.within(geom), "idx"]) + tuple(sperringene.loc[sperringene.intersects(geom), "idx"])
+                
+                nye_kanskje_isolerte = tuple(veger.loc[veger.within(geom), "idx"]) + tuple(sperringene.loc[sperringene.intersects(geom), "idx"])
                 nye_kanskje_isolerte = tuple(x for x in nye_kanskje_isolerte if x not in kanskje_isolerte)
+                
                 kanskje_isolerte = kanskje_isolerte + nye_kanskje_isolerte
-                storrelsene = storrelsene + tuple(geom.length for _ in range(len(nye_kanskje_isolerte)))
-        return kanskje_isolerte, storrelsene
+                                
+        return kanskje_isolerte
        
-    kanskje_isolerte, storrelsene = kat_loop(ikke_sperringer, sperringer, "koor_kat")
-    kanskje_isolerte2, storrelsene2 = kat_loop(ikke_sperringer, sperringer, "koor_kat2")
-    
-    # dict med id-er og lengder
-    kanskje_isolerte = {x: lengde for x, lengde in zip(kanskje_isolerte, storrelsene) }
+    kanskje_isolerte = buffdissexp_gridish_loop(ikke_sperringer, sperringer, lengde, "gridish")
+    kanskje_isolerte2 = buffdissexp_gridish_loop(ikke_sperringer, sperringer, lengde, "gridish2")
 
-    # behold bare id-ene som er små nettverk i begge rutelooper. Og velg maks. lengde for hver id
-    isolerte_nettverk = {i: max([lengde, kanskje_isolerte[i]]) 
-                        for i, lengde in  zip(kanskje_isolerte2, storrelsene2)
-                        if i in kanskje_isolerte}
+    isolerte_nettverk = [idx for idx in kanskje_isolerte 
+                         if idx in kanskje_isolerte2]
 
-    # lag kolonne med lengden for id-ene som er isolerte. Ellers blir isolert 0
-    veger.loc[veger.idx.isin(isolerte_nettverk), "isolert"] = [isolerte_nettverk[x] for x in veger.loc[veger.idx.isin(isolerte_nettverk), "idx"] ]
-
+    veger.loc[veger.idx.isin(isolerte_nettverk), "isolert"] = 1
     veger.loc[~veger.idx.isin(isolerte_nettverk), "isolert"] = 0
     
     return veger
     
     
 def tett_nettverkshull(noder, veger, avstand, crs=25833):
-    
-    """ Lager rette linjer der det er små hull i nettverket."""
+    """ 
+    Lager rette linjer der det er små hull i nettverket. """
         
     blindveger = noder[noder["n"] <= 1]
     blindveger = blindveger.reset_index(drop=True)
@@ -291,10 +316,10 @@ def tett_nettverkshull(noder, veger, avstand, crs=25833):
     nye_lenker["geometry"] = shapely.shortest_line(fra, til)
     nye_lenker = gpd.GeoDataFrame(nye_lenker, geometry="geometry", crs=crs)
     
-    # lag alle de andre kolonnene
+    # så lage resten av kolonnene 
+    
     nye_lenker["sperring"] = 1
     nye_lenker["minutter"] = 0.02
-    nye_lenker["turn_restriction"] = np.nan
 
     ytterpunkter = nye_lenker.geometry.boundary.explode(ignore_index=True) 
     wkt_geom = [f"POINT ({x} {y})" for x, y in zip(ytterpunkter.x, ytterpunkter.y)]
@@ -306,7 +331,7 @@ def tett_nettverkshull(noder, veger, avstand, crs=25833):
     
     wkt_kat_dict = {wkt: kat for wkt, kat in zip(veger["source_wkt"], veger["category"])}
     nye_lenker["category"] = nye_lenker["source_wkt"].map(wkt_kat_dict)
-    
+        
     return nye_lenker
 
 
@@ -403,19 +428,11 @@ def lag_node_ids(veger, crs=25833):
     
     noder["node_id"] = noder.index
     noder["node_id"] = noder["node_id"].astype(str) # funker ikke med numeriske node-navn i igraph, pussig nok...
-
-    noder = noder[["node_id", "wkt", "n"]]
     
     #koble på de nye node-id-ene
-    veger = (veger
-            .drop(["source", "target", "nz_idx"], axis=1, errors="ignore")
-            .merge(noder, left_on = "source_wkt", right_on = "wkt", how="inner")
-            .rename(columns={"node_id":"source"})
-            .drop(["wkt", "n"], axis=1)
-            .merge(noder, left_on = "target_wkt", right_on = "wkt", how="inner")
-            .rename(columns={"node_id":"target"})
-            .drop(["wkt", "n"], axis=1)
-    )
+    nodeordbok = {wkt: node_id for wkt, node_id in zip(noder["wkt"], noder["node_id"])}
+    veger["source"] = veger["source_wkt"].map(nodeordbok)
+    veger["target"] = veger["target_wkt"].map(nodeordbok)
     
     veger["meter"] = veger.length
     
