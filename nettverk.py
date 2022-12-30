@@ -7,14 +7,17 @@ from networkz.hjelpefunksjoner import fjern_tomme_geometrier, gdf_concat
 
 
 # funksjon som tilpasser vegnettet til classen Graf().
+# mange parametre for at den skal kunne brukes for alle nettverk, men burde nok vært splitta litt opp.
 def lag_nettverk(veger,
                  directed = True,
+                 
                  source: str = "fromnodeid",
                  target: str = "tonodeid",
                  linkid: str = "linkid",
                  minutter = ("drivetime_fw", "drivetime_bw"),
                  vegkategori: str = "category",
                  kommunekolonne = "municipality",
+                 
                  finn_isolerte = True,
                  utvid: int = None, # meter
                  turn_restrictions = None,
@@ -110,9 +113,9 @@ def lag_nettverk(veger,
         behold_kolonner = behold_kolonner + ["stigningsprosent"]
 
     veger_kopi["geometry"] = shapely.force_2d(veger_kopi.geometry)
-
+    
     if not directed or all(veger_kopi["oneway"].isna()):
-        veger_edges = veger_kopi.copy()
+        veger_edges = veger_kopi
         veger_edges["minutter"] = np.where(veger_edges["drivetime_fw"].fillna(0) > 0,
                                            veger_edges["drivetime_fw"], 
                                            veger_edges["drivetime_bw"])
@@ -178,18 +181,12 @@ def lag_nettverk(veger,
     return veger_edges
 
 
-def tilpass_veger_sykkelfot(veger):
-    veger = veger.loc[veger.sykkelforbud != "Ja"]
-    veger = veger.rename(columns={"trafikkretning": "oneway"})
-    veger["oneway"] = veger.oneway.map({"MED": "FT", "MOT": "TF", "BEGGE": "B"})
-    return veger
-
-
 def gridish(gdf, meter, x2 = False):
     """
+    Enkel rutedeling av dataene. For å fleksibelt kunne loope for små områder sånn at ting blir håndterbart. 
     Gir dataene kolonne med avrundede xy-koordinater. Rundes av til valgfritt antall meter.
-    Hvis dataene er for tunge og man ikke har en kommunekolonne e.l. som gjør det enkelt å dele opp.
-    x2=True gir en kolonne til med ruter 1/2 hakk nedover og bortover. Hvis grensetilfeller er viktig, kan man loope en gang per rutekategorikolonne. """
+    x2=True gir en kolonne til med ruter 1/2 hakk nedover og bortover. Hvis grensetilfeller er viktig, kan man loope en gang per rutekategorikolonne. 
+    """
     
     # rund ned koordinatene og sett sammen til kolonne
     gdf["gridish"] = round(gdf.geometry.bounds.minx/meter,1).astype(int).astype(str) + "_" + round(gdf.geometry.bounds.miny/meter,1).astype(int).astype(str)
@@ -220,12 +217,11 @@ def gridish(gdf, meter, x2 = False):
 
 def finn_isolerte_nettverk(veger, lengde: int, ruteloop_m: int):
     """ 
-    Gir vegdataene kolonnen 'isolert', hvor 1 betyr 'isolert'.
-    Finner de isolerte ved å bufre 0.001 meter, dissolve og explode (til singlepart). 
-    Dette er tungt, og gjøres derfor i loop for et lite område av gangen. 
+    Gir vegdataene kolonnen 'isolert', som indikerer hvilke veger som er adskilt fra hovedvegnettet med bom/sperring e.l..
+    Dette gjøres ved å samle veger som nesten overlapper (innen 0.001 meter), så velge ut ansamlingene som er under en viss størrelse og utstrekning.
+    Dette er fryktelig tungt, så det gjøres i loop for et lite område av gangen. 
     Så gjentas loopen for områder som er halvveis forskjøvet på grunn av grensetilfeller. 
     Vegene som er med i begge loops, anses som isolerte. 
-    Veg-indeksene (idx) lagres i tuple fordi det tar mindre plass enn lister.
     """
     
     # gir vegdataene to kolonner med koordinatkategorier. Den andre kolonnen inneholder rutekategorier som er halvveis forskøvet
@@ -239,13 +235,14 @@ def finn_isolerte_nettverk(veger, lengde: int, ruteloop_m: int):
         ikke_sperringer = veger.copy()
         sperringer = veger.copy()
     
-    # buffer, dissolve og explode for hver rute
+    # samle nesten overlappende med buffer, dissolve og explode. Loopes for hver rute.
     def buffdissexp_gridish_loop(veger, sperringer, lengde, kolonne):
         
+        # lagrer veg-indeksene (idx) i tuple fordi det tar mindre plass enn lister
         kanskje_isolerte = ()
         for i in veger[kolonne].unique():
             
-            vegene = veger.loc[veger[kolonne] == i, ["geometry", "idx"]]
+            vegene = veger.loc[veger[kolonne] == i, ["geometry"]]
             sperringene = sperringer.loc[sperringer[kolonne] == i, ["geometry", "idx"]]
             
             vegene["geometry"] = vegene.buffer(0.001, resolution = 1) # lavest mulig oppløsning for å få det fort
@@ -254,15 +251,16 @@ def finn_isolerte_nettverk(veger, lengde: int, ruteloop_m: int):
             
             # velger nettverk under gitt lengde - hvis de er under halvparten av total lengde og mindre utstrekning enn total lengde
             sum_lengde = dissolvet.length.sum()
-            singlepart["utstrekning"] = singlepart.convex_hull.area # fordi noen lange, isolerte veger, gjerne i skogen, kan være brukbare for turer i skogen.
+            singlepart["utstrekning"] = singlepart.convex_hull.area # fordi lange, isolerte veger, gjerne skogsbilveger, kan være brukbare for turer innad i skogen.
             lite_nettverk = singlepart[(singlepart.length < lengde*2) & 
                                        (singlepart.length < sum_lengde*0.5) &
                                        (singlepart["utstrekning"] < sum_lengde) ]
             
-            # legg til nye idx-er i tuple-en med kanskje isolerte nettverk.
+            # legg til nye idx-er i tuple-en med kanskje isolerte nettverk
             for geom in lite_nettverk.geometry:
                 
                 nye_kanskje_isolerte = tuple(veger.loc[veger.within(geom), "idx"]) + tuple(sperringene.loc[sperringene.intersects(geom), "idx"])
+                
                 nye_kanskje_isolerte = tuple(x for x in nye_kanskje_isolerte if x not in kanskje_isolerte)
                 
                 kanskje_isolerte = kanskje_isolerte + nye_kanskje_isolerte
@@ -275,64 +273,90 @@ def finn_isolerte_nettverk(veger, lengde: int, ruteloop_m: int):
     isolerte_nettverk = [idx for idx in kanskje_isolerte 
                          if idx in kanskje_isolerte2]
 
-    veger.loc[veger.idx.isin(isolerte_nettverk), "isolert"] = 1
-    veger.loc[~veger.idx.isin(isolerte_nettverk), "isolert"] = 0
-    
-    return veger
-    
-    
-def tett_nettverkshull(noder, veger, avstand, crs=25833):
-    """ 
-    Lager rette linjer der det er små hull i nettverket. """
-        
-    blindveger = noder[noder["n"] <= 1]
-    blindveger = blindveger.reset_index(drop=True)
+    veger["isolert"] = np.where(veger.idx.isin(isolerte_nettverk), 
+                                1, 0)
 
+    return veger.loc[:, ~veger.columns.str.contains("gridish")]
+    
+    
+def tett_nettverkshull(noder, veger, avstand):
+    """ 
+    Lager rette linjer der det er små hull i nettverket. 
+    Bruker NearestNeighbors fra scikit-learn, fordi det er utrolig raskt. Man trenger ikke loope for områder en gang. 
+    scikit-learn bruker numpy arrays, som må konverteres tilbake til geopandas via index-ene.
+    """
+    
+    crs = noder.crs
+    
+    # velger ut nodene som kun finnes i én lenke. Altså blindveier i en nettverksanalyse.
+    blindveger = noder[noder["n"] <= 1]
+    
+    # viktig å nullstille index siden sklearn kneighbors gir oss en numpy.array med indekser
+    blindveger = blindveger.reset_index(drop=True)
+    
     if len(blindveger) <= 1:
         blindveger["minutter"] = -1
         return blindveger
     
-    # koordinater til numpy array
+    # koordinater i tuple som numpy array
     blindveger_array = np.array([(x, y) for x, y in zip(blindveger.geometry.x, blindveger.geometry.y)])
     
-    # finn nærmeste to naboer og velg ut nest nærmeste (nærmeste er fra og til samme punkt)
+    # finn nærmeste to naboer
     nbr = NearestNeighbors(n_neighbors=2, algorithm='ball_tree').fit(blindveger_array)
     avstander, idxs = nbr.kneighbors(blindveger_array)
+    
+    # velg ut nest nærmeste (nærmeste er fra og til samme punkt)
     avstander = avstander[:,1]
     idxs = idxs[:,1]
     
-    # start- og sluttgeometrier for de nye lenkene, hvis under ønsket avstand
+    """
+    Nå har vi 1d-numpy arrays av lik lengde som blindvegene. 
+    'idxs' inneholder numpy-indeksen for vegen som er nærmest, altså endepunktene for de nye lenkene.
+    For å konvertere dette fra numpy til geopandas, trengs geometri og node-id. 
+    """
+    
+    # fra-geometrien kan hentes direkte siden avstandene og blindvegene har samme rekkefølge
     fra = np.array([geom.wkt for dist, geom in zip(avstander, blindveger.geometry)
                             if dist < avstand and dist > 0])
     
+    # til-geometrien må hentes via index-en
     til = np.array([blindveger.loc[blindveger.index==idx, "wkt"].iloc[0]
                             for dist, idx in zip(avstander, idxs)
                             if dist < avstand and dist > 0])
 
     # lag GeoDataFrame med rette linjer
-    fra =  gpd.GeoSeries.from_wkt(fra, crs=crs)
-    til =  gpd.GeoSeries.from_wkt(til, crs=crs)
-    nye_lenker = pd.DataFrame()
-    nye_lenker["geometry"] = shapely.shortest_line(fra, til)
-    nye_lenker = gpd.GeoDataFrame(nye_lenker, geometry="geometry", crs=crs)
+    fra = gpd.GeoSeries.from_wkt(fra, crs=crs)
+    til = gpd.GeoSeries.from_wkt(til, crs=crs)
+    nye_lenker = shapely.shortest_line(fra, til)
+    nye_lenker = gpd.GeoDataFrame({"geometry": nye_lenker}, geometry="geometry", crs=crs)
     
-    # så lage resten av kolonnene 
+    # så lage resten av kolonnene
     
-    nye_lenker["sperring"] = 1
-    nye_lenker["minutter"] = 0.02
-
-    ytterpunkter = nye_lenker.geometry.boundary.explode(ignore_index=True) 
+    # lager wkt på samme måte som for hele nettverket. Prøvde å bruke array-ene over, men tror floats med .0 der blir til int.
+    ytterpunkter = nye_lenker.geometry.boundary.explode(ignore_index=True)
     wkt_geom = [f"POINT ({x} {y})" for x, y in zip(ytterpunkter.x, ytterpunkter.y)]
     nye_lenker["source_wkt"], nye_lenker["target_wkt"] = wkt_geom[0::2], wkt_geom[1::2]
-    
+
     wkt_id_dict = {wkt: id for wkt, id in zip(blindveger["wkt"], blindveger["node_id"])}
     nye_lenker["source"] = nye_lenker["source_wkt"].map(wkt_id_dict)
     nye_lenker["target"] = nye_lenker["target_wkt"].map(wkt_id_dict)
+
+    assert not any(nye_lenker.source.isna()) and not any(nye_lenker.target.isna()), "Manglende source/target-id-er."
     
     wkt_kat_dict = {wkt: kat for wkt, kat in zip(veger["source_wkt"], veger["category"])}
     nye_lenker["category"] = nye_lenker["source_wkt"].map(wkt_kat_dict)
-        
+    
+    nye_lenker["sperring"] = 1
+    nye_lenker["minutter"] = 0.02
+    
     return nye_lenker
+
+
+def tilpass_veger_sykkelfot(veger):
+    veger = veger.loc[veger.sykkelforbud != "Ja"]
+    veger = veger.rename(columns={"trafikkretning": "oneway"})
+    veger["oneway"] = veger.oneway.map({"MED": "FT", "MOT": "TF", "BEGGE": "B"})
+    return veger
 
 
 def lag_turn_restrictions(veger, turn_restrictions):
