@@ -22,14 +22,6 @@ def lag_graf(G, kostnad, # kostnad er eget parameter siden od_cost_matrix looper
     
     # omkod meter til minutter
     avstander_start = beregn_kostnad(avstander_start, kostnad, G.kost_til_nodene)
-    """
-    if G.kost_til_nodene==0:
-        avstander_start = [0 for _ in avstander_start]
-    elif kostnad=="minutter":
-        avstander_start = [m_til_min(x, G.kost_til_nodene) for x in avstander_start]
-    elif kostnad=="meter":
-        avstander_start = [x*1.5 for x in avstander_start]
-    """
     
     lenker = lenker + lenker_start
     kostnader = kostnader + avstander_start
@@ -42,14 +34,7 @@ def lag_graf(G, kostnad, # kostnad er eget parameter siden od_cost_matrix looper
             raise ValueError("Ingen sluttpunkter innen search_tolerance")
         
         avstander_slutt = beregn_kostnad(avstander_slutt, kostnad, G.kost_til_nodene)
-        """
-        if G.kost_til_nodene==0:
-            avstander_slutt = [0 for _ in avstander_slutt]
-        elif kostnad=="minutter":
-            avstander_slutt = [m_til_min(x, G.kost_til_nodene) for x in avstander_slutt]
-        elif kostnad=="meter":
-            avstander_slutt = [x*1.5 for x in avstander_slutt]
-        """ 
+
         lenker = lenker + lenker_slutt
         kostnader = kostnader + avstander_slutt
 
