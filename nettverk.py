@@ -22,7 +22,8 @@ def lag_nettverk(veger,
                  utvid: int = None, # meter
                  turn_restrictions = None,
                  stigningsprosent = False,
-                 behold_kolonner: list = None
+                 behold_kolonner: list = None,
+                 copy = True
                  ):
     
     if behold_kolonner:
@@ -32,8 +33,11 @@ def lag_nettverk(veger,
     else:
         behold_kolonner = []
     
-    veger_kopi = veger.copy()
-    
+    if copy:
+        veger_kopi = veger.copy()
+    else:
+        veger_kopi = veger
+        
     veger_kopi["idx"] = veger_kopi.index
 
     veger_kopi.columns = [col.lower() for col in veger_kopi.columns]
@@ -86,6 +90,8 @@ def lag_nettverk(veger,
     sirkler = ytterpunkter.loc[ytterpunkter.is_empty, "idx"] #sirkler har tom boundary
     veger_kopi = veger_kopi[~veger_kopi.idx.isin(sirkler)]
     
+    del ytterpunkter, sirkler
+    
     assert len(veger_kopi), "vegene har 0 rader"
 
     """
@@ -127,8 +133,7 @@ def lag_nettverk(veger,
         
         #dupliser lenkene som går begge veier og snu source og target i den ene
         begge_retninger1 = veger_kopi[veger_kopi.oneway=="B"]
-        begge_retninger2 = begge_retninger1.copy()
-        begge_retninger2 = begge_retninger2.rename(columns={"source": "target", "target": "source", "source_wkt": "target_wkt", "target_wkt": "source_wkt"})
+        begge_retninger2 = begge_retninger1.rename(columns={"source": "target", "target": "source", "source_wkt": "target_wkt", "target_wkt": "source_wkt"})
         
         # lag minutt-kolonne
         begge_retninger1 = begge_retninger1.rename(columns={"drivetime_fw": "minutter"})
@@ -229,11 +234,11 @@ def finn_isolerte_nettverk(veger, lengde: int, ruteloop_m: int):
     
     # fjerner sperringer før beregningen
     if "sperring" in veger.columns:
-        ikke_sperringer = veger[veger.sperring.astype(int) != 1]
-        sperringer = veger[veger.sperring.astype(int) == 1]
+        ikke_sperringer = veger.loc[veger.sperring.astype(int) != 1]
+        sperringer = veger.loc[veger.sperring.astype(int) == 1]
     else:
-        ikke_sperringer = veger.copy()
-        sperringer = veger.copy()
+        ikke_sperringer = veger
+        sperringer = veger
     
     # samle nesten overlappende med buffer, dissolve og explode. Loopes for hver rute.
     def buffdissexp_gridish_loop(veger, sperringer, lengde, kolonne):
@@ -360,11 +365,9 @@ def tilpass_veger_sykkelfot(veger):
 
 
 def lag_turn_restrictions(veger, turn_restrictions):
-    
-    veger_edges = veger.copy()
-    
+        
     # FID starter på  1
-    veger_edges["idx"] = veger_edges["idx"] + 1
+    veger["fid"] = veger["idx"] + 1
 
     turn_restrictions.columns = [col.lower() for col in turn_restrictions.columns]
 
@@ -373,29 +376,29 @@ def lag_turn_restrictions(veger, turn_restrictions):
                 
     # hvis 2021-data
     if "edge1fid" in turn_restrictions.columns:
-        veger_edges["idx"] = veger_edges["idx"].astype(str)
+        veger["fid"] = veger["fid"].astype(str)
         turn_restrictions1 = turn_restrictions.loc[turn_restrictions.edge1end=="Y", ["edge1fid", "edge2fid"]].rename(columns={"edge1fid":"edge2fid", "edge2fid":"edge1fid"})
         turn_restrictions2 = turn_restrictions.loc[turn_restrictions.edge1end=="N", ["edge1fid", "edge2fid"]]
         turn_restrictions = pd.concat([turn_restrictions1, turn_restrictions2], axis=0, ignore_index=True)
-        lenker_med_restriction = veger_edges.merge(turn_restrictions, left_on = "idx", right_on = "edge1fid", how = "inner")
+        lenker_med_restriction = veger.merge(turn_restrictions, left_on = "fid", right_on = "edge1fid", how = "inner")
         
     # hvis 2022
     else:    
-        veger_edges["linkid"] = veger_edges["linkid"].astype(str)
-        lenker_med_restriction = veger_edges.merge(turn_restrictions, left_on = "linkid", right_on = "fromlinkid", how = "inner")
-#      lenker_med_restriction = veger_edges.merge(turn_restrictions, left_on = ["source", "target"], right_on = ["fromfromnode", "fromtonode"], how = "inner")
-    #    lenker_med_restriction2 = veger_edges.merge(turn_restrictions, left_on = ["source", "target", "linkid"], right_on = ["fromfromnode", "fromtonode", "fromlinkid"], how = "inner")
+        veger["linkid"] = veger["linkid"].astype(str)
+        lenker_med_restriction = veger.merge(turn_restrictions, left_on = "linkid", right_on = "fromlinkid", how = "inner")
+#      lenker_med_restriction = veger.merge(turn_restrictions, left_on = ["source", "target"], right_on = ["fromfromnode", "fromtonode"], how = "inner")
+    #    lenker_med_restriction2 = veger.merge(turn_restrictions, left_on = ["source", "target", "linkid"], right_on = ["fromfromnode", "fromtonode", "fromlinkid"], how = "inner")
         
     # gjør lenkene med restrictions til første del av nye dobbellenker som skal lages
     lenker_med_restriction = (lenker_med_restriction
                               .drop("edge1fid", axis=1, errors="ignore")
-                              .rename(columns={"target": "middlenode", "minutter": "minutter1", "meter": "meter1", "geometry": "geom1", "idx": "edge1fid"})
+                              .rename(columns={"target": "middlenode", "minutter": "minutter1", "meter": "meter1", "geometry": "geom1", "fid": "edge1fid"})
                               .loc[:, ["source", "source_wkt", "middlenode", "minutter1", "meter1", "geom1", "edge1fid"]] )
     # klargjør tabell som skal bli andre del av dobbellenkene
-    restrictions = (veger_edges
-            .copy()
-            .rename(columns={"source": "middlenode", "minutter": "minutter2", "meter": "meter2", "geometry": "geom2", "idx": "edge2fid"})
-            .loc[:, ["middlenode","target", "target_wkt", "minutter2", "meter2", "geom2", "edge2fid"]] )
+    restrictions = (veger
+                    .rename(columns={"source": "middlenode", "minutter": "minutter2", "meter": "meter2", "geometry": "geom2", "fid": "edge2fid"})
+                    .loc[:, ["middlenode","target", "target_wkt", "minutter2", "meter2", "geom2", "edge2fid"]] 
+                    )
 
     # koble basert på den nye kolonnen 'middlenode', som blir midterste node i dobbellenkene
     fra_noder_med_restriction = lenker_med_restriction.merge(restrictions, 
@@ -422,11 +425,11 @@ def lag_turn_restrictions(veger, turn_restrictions):
     dobbellenker["turn_restriction"] = True
     
     if "edge1fid" in turn_restrictions.columns:
-        veger_edges.loc[(veger_edges["idx"].isin(turn_restrictions["edge1fid"])), "turn_restriction"] = False
+        veger.loc[(veger["fid"].isin(turn_restrictions["edge1fid"])), "turn_restriction"] = False
     else:
-        veger_edges.loc[(veger_edges["linkid"].isin(turn_restrictions["fromlinkid"])), "turn_restriction"] = False
+        veger.loc[(veger["linkid"].isin(turn_restrictions["fromlinkid"])), "turn_restriction"] = False
 
-    return gdf_concat([veger_edges, dobbellenker])
+    return gdf_concat([veger, dobbellenker])
 
 
 def lag_node_ids(veger, crs=25833):
