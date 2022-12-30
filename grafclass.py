@@ -8,7 +8,6 @@ from networkz.shortest_path import shortest_path
 from networkz.service_area import service_area
 from networkz.nettverk import lag_node_ids
 from networkz.hjelpefunksjoner import read_geopandas
-from networkz.lag_igraph import m_til_min
 
 
 # årene det ligger tilrettelagte vegnettverk på Dapla.
