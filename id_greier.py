@@ -2,6 +2,11 @@ import numpy as np
 
 
 def lag_midlr_id(noder, startpunkter, sluttpunkter=None):
+    """ 
+    Lager id-kolonne som brukes som node-id-er i igraph.Graph(). 
+    Fordi start- og sluttpunktene må ha node-id-er som ikke finnes i nettverket.
+    """
+    
     startpunkter["nz_idx"] = range(len(startpunkter))
     startpunkter["nz_idx"] = startpunkter["nz_idx"] + np.max(noder.node_id.astype(int)) + 1
     startpunkter["nz_idx"] = startpunkter["nz_idx"].astype(str)
