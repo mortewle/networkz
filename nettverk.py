@@ -1,7 +1,7 @@
 import numpy as np
 import pandas as pd
 import geopandas as gpd
-import shapely
+from shapely import line_merge, union, shortest_line, force_2d
 from sklearn.neighbors import NearestNeighbors
 from networkz.hjelpefunksjoner import fjern_tomme_geometrier, gdf_concat
 
@@ -11,8 +11,8 @@ from networkz.hjelpefunksjoner import fjern_tomme_geometrier, gdf_concat
 def lag_nettverk(veger,
                  directed = True,
                  
-                 source: str = "fromnodeid",
-                 target: str = "tonodeid",
+                 source: str = "fromnode",
+                 target: str = "tonode",
                  linkid: str = "linkid",
                  minutter = ("drivetime_fw", "drivetime_bw"),
                  vegkategori: str = "category",
@@ -53,10 +53,11 @@ def lag_nettverk(veger,
     
     if not "oneway" in veger_kopi.columns:
         veger_kopi["oneway"] = np.nan
+        
     if not "sperring" in veger_kopi.columns:
         veger_kopi["sperring"] = -1
     
-    # litt opprydning (til utm33-koordinater, endre navn på kolonner, beholde kun relevante kolonner, resette index)
+    # litt opprydning
     veger_kopi = (veger_kopi
                   .to_crs(25833)
                   .loc[:, ["idx", "source", "target", "linkid", "drivetime_fw", "drivetime_bw", "oneway", "sperring", "category", "KOMMUNENR", "geometry"] + behold_kolonner]
@@ -65,11 +66,11 @@ def lag_nettverk(veger,
     
     # fra multilinestring til linestring. Og fjerne z-koordinat fordi de ikke trengs
     veger_kopi = fjern_tomme_geometrier(veger_kopi)
-    veger_kopi["geometry"] = shapely.line_merge(veger_kopi.geometry)
+    veger_kopi["geometry"] = line_merge(veger_kopi.geometry)
     
     assert len(veger_kopi), "vegene har 0 rader"
-
-    #hvis noen lenker fortsatt er multilinestrings, må de splittes for å ikke ha flere enn to ytterpunkter snart
+    
+    #hvis noen lenker fortsatt er multilinestrings, må de splittes for å ikke ha flere enn to ytterpunkter
     n = len(veger_kopi)
     veger_kopi = veger_kopi.explode(ignore_index=True)
     if len(veger_kopi)<n:
@@ -95,14 +96,15 @@ def lag_nettverk(veger,
     assert len(veger_kopi), "vegene har 0 rader"
 
     """
-    while np.max(veger_edges.length) > 1001:
-        veger_edges = kutt_linjer(veger_edges, 1000)
-    while np.max(veger_edges.length) > 301:
-        veger_edges = kutt_linjer(veger_edges, 300)
-    while np.max(veger_edges.length) > 101:
-        veger_edges = kutt_linjer(veger_edges, 100)
-    while np.max(veger_edges.length) > 51:
-        veger_edges = kutt_linjer(veger_edges, 50)
+    del opp lange linjer?
+    while np.max(veglenker.length) > 1001:
+        veglenker = kutt_linjer(veglenker, 1000)
+    while np.max(veglenker.length) > 301:
+        veglenker = kutt_linjer(veglenker, 300)
+    while np.max(veglenker.length) > 101:
+        veglenker = kutt_linjer(veglenker, 100)
+    while np.max(veglenker.length) > 51:
+        veglenker = kutt_linjer(veglenker, 50)
     """
     
     # lag kolonner med geometritekst (wkt) for source og target
@@ -111,79 +113,95 @@ def lag_nettverk(veger,
     veger_kopi["source_wkt"], veger_kopi["target_wkt"] = wkt_geom[0::2], wkt_geom[1::2] # gjør annenhvert ytterpunkt til source_wkt og target_wkt
     
     if stigningsprosent:
-        assert all(ytterpunkter.has_z), "Vegdataene må ha z-koordinater for å kunne beregne stigning."
-        hoyde = [z for z in ytterpunkter.geometry.z]
-        veger_kopi["hoyde_source"], veger_kopi["hoyde_target"] = hoyde[0::2], hoyde[1::2]
-        veger_kopi["stigningsprosent"] = (veger_kopi.hoyde_target - veger_kopi.hoyde_source) / veger_kopi.length * 100
-        veger_kopi.loc[(veger_kopi.stigningsprosent>100) | (veger_kopi.stigningsprosent<-100), "stigningsprosent"] = 0
+        veger_kopi = beregn_stigningsprosent(veger_kopi, ytterpunkter)       
         behold_kolonner = behold_kolonner + ["stigningsprosent"]
 
-    veger_kopi["geometry"] = shapely.force_2d(veger_kopi.geometry)
+    veger_kopi["geometry"] = force_2d(veger_kopi.geometry)
     
     if not directed or all(veger_kopi["oneway"].isna()):
-        veger_edges = veger_kopi
-        veger_edges["minutter"] = np.where(veger_edges["drivetime_fw"].fillna(0) > 0,
-                                           veger_edges["drivetime_fw"], 
-                                           veger_edges["drivetime_bw"])
+        veglenker = veger_kopi
+        veglenker["minutter"] = np.where(veglenker["drivetime_fw"].fillna(0) > 0,
+                                         veglenker["drivetime_fw"], 
+                                         veglenker["drivetime_bw"])        
     else:
-        #velg ut de enveiskjørte og snu source og target for lenkene som går "feil" vei
-        ft = veger_kopi.loc[(veger_kopi.oneway=="FT") | (veger_kopi.oneway=="F")] 
-        tf = veger_kopi.loc[(veger_kopi.oneway=="TF") | (veger_kopi.oneway=="T")]
-        tf = tf.rename(columns={"source": "target", "target": "source", "source_wkt": "target_wkt", "target_wkt": "source_wkt"})           
-        
-        #dupliser lenkene som går begge veier og snu source og target i den ene
-        begge_retninger1 = veger_kopi[veger_kopi.oneway=="B"]
-        begge_retninger2 = begge_retninger1.rename(columns={"source": "target", "target": "source", "source_wkt": "target_wkt", "target_wkt": "source_wkt"})
-        
-        # lag minutt-kolonne
-        begge_retninger1 = begge_retninger1.rename(columns={"drivetime_fw": "minutter"})
-        begge_retninger2 = begge_retninger2.rename(columns={"drivetime_bw": "minutter"})
-        ft = ft.rename(columns={"drivetime_fw": "minutter"})
-        tf = tf.rename(columns={"drivetime_bw": "minutter"})
-
-        if stigningsprosent:
-            tf["stigningsprosent"] = tf["stigningsprosent"] * -1
-            begge_retninger2["stigningsprosent"] = begge_retninger2["stigningsprosent"] * -1
-            
-        # oneway=="N" er sperringer fram til og med 2021
-        n = veger_kopi[(veger_kopi.oneway=="N")]
-        if len(n)>0:
-            n["minutter"] = np.where((n["drivetime_fw"].isna()) | (n["drivetime_fw"]==0) | (n["drivetime_fw"]==""),
-                                        n["drivetime_bw"],
-                                        n["drivetime_fw"])
-            n2 = n.rename(columns={"source": "target", "target": "source", "source_wkt": "target_wkt", "target_wkt": "source_wkt"})
-            veger_edges = gdf_concat([begge_retninger1, begge_retninger2, ft, tf, n, n2])
-        else:
-            veger_edges = gdf_concat([begge_retninger1, begge_retninger2, ft, tf])
+        veglenker = snu_og_samle_veglenker(veger_kopi, stigningsprosent)
     
-    assert len(veger_edges), "vegene har 0 rader"
-
+    assert len(veglenker), "vegene har 0 rader"
+    
     if turn_restrictions:
-        veger_edges = lag_turn_restrictions(veger_edges, turn_restrictions)
+        veglenker = lag_turn_restrictions(veglenker, turn_restrictions)
     else:
-        veger_edges["turn_restriction"] = np.nan
+        veglenker["turn_restriction"] = np.nan
     
-    #nye node-id-er som følger index (fordi jeg indexer med numpy arrays i avstand_til_noder())
-    veger_edges, noder = lag_node_ids(veger_edges)
-
+    #nye node-id-er som følger index (fordi det indexes med numpy arrays i avstand_til_noder())
+    veglenker, noder = lag_node_ids(veglenker)
+    
     if utvid:
         if not isinstance(utvid, (float, int)):
             raise ValueError("utvid må være et tall (antall meter man vil utvide linjer)")
-        tettede_hull = tett_nettverkshull(noder, veger_edges, utvid)
-        veger_edges = gdf_concat([veger_edges, tettede_hull])
+        tettede_hull = tett_nettverkshull(noder, veglenker, utvid)
+        veglenker = gdf_concat([veglenker, tettede_hull])
     
-    veger_edges["meter"] = veger_edges.length
+    veglenker["meter"] = veglenker.length
 
-    veger_edges = veger_edges.loc[(veger_edges.minutter > 0) | (veger_edges.minutter.isna()),
+    veglenker = veglenker.loc[(veglenker.minutter > 0) | (veglenker.minutter.isna()),
                                   ["source", "target", "minutter", "meter", "turn_restriction", "oneway", "sperring", vegkategori, "isolert", "KOMMUNENR", 
                                    "source_wkt", "target_wkt", "geometry"] + behold_kolonner]
     
     # fjern kolonner som ikke ble brukt        
     for col in ["minutter", "turn_restriction", "isolert", vegkategori, "sperring", "KOMMUNENR", "oneway"]:
-        if len(veger_edges[~((veger_edges[col].isna()) | (veger_edges[col]==0.02) | (veger_edges[col]==-1))])==0:
-            veger_edges = veger_edges.drop(col, axis=1)
+        if len(veglenker[~((veglenker[col].isna()) | (veglenker[col]==0.02) | (veglenker[col]==-1))])==0:
+            veglenker = veglenker.drop(col, axis=1)
     
-    return veger_edges
+    return veglenker
+
+
+def beregn_stigningsprosent(veger, ytterpunkter):
+    
+    assert all(ytterpunkter.has_z), "Vegdataene må ha z-koordinater for å kunne beregne stigning."
+    
+    hoyde = [z for z in ytterpunkter.geometry.z]
+    veger["hoyde_source"], veger["hoyde_target"] = hoyde[0::2], hoyde[1::2]
+    
+    veger["stigningsprosent"] = (veger.hoyde_target - veger.hoyde_source) / veger.length * 100
+    
+    veger.loc[(veger.stigningsprosent>100) | (veger.stigningsprosent<-100), "stigningsprosent"] = 0
+    
+    return veger
+
+
+def snu_og_samle_veglenker(veger, stigningsprosent):
+    #velg ut de enveiskjørte og snu source og target for lenkene som går "feil" vei
+    ft = veger.loc[(veger.oneway=="FT") | (veger.oneway=="F")] 
+    tf = veger.loc[(veger.oneway=="TF") | (veger.oneway=="T")]
+    tf = tf.rename(columns={"source": "target", "target": "source", "source_wkt": "target_wkt", "target_wkt": "source_wkt"})           
+    
+    #dupliser lenkene som går begge veier og snu source og target i den ene
+    begge_retninger1 = veger[veger.oneway=="B"]
+    begge_retninger2 = begge_retninger1.rename(columns={"source": "target", "target": "source", "source_wkt": "target_wkt", "target_wkt": "source_wkt"})
+    
+    # lag minutt-kolonne
+    begge_retninger1 = begge_retninger1.rename(columns={"drivetime_fw": "minutter"})
+    begge_retninger2 = begge_retninger2.rename(columns={"drivetime_bw": "minutter"})
+    ft = ft.rename(columns={"drivetime_fw": "minutter"})
+    tf = tf.rename(columns={"drivetime_bw": "minutter"})
+    
+    if stigningsprosent:
+        tf["stigningsprosent"] = tf["stigningsprosent"] * -1
+        begge_retninger2["stigningsprosent"] = begge_retninger2["stigningsprosent"] * -1
+        
+    # oneway=="N" er sperringer fram til og med 2021
+    n = veger[(veger.oneway=="N")]
+    if len(n)>0:
+        n["minutter"] = np.where((n["drivetime_fw"].isna()) | (n["drivetime_fw"]==0) | (n["drivetime_fw"]==""),
+                                    n["drivetime_bw"],
+                                    n["drivetime_fw"])
+        n2 = n.rename(columns={"source": "target", "target": "source", "source_wkt": "target_wkt", "target_wkt": "source_wkt"})
+        veglenker = gdf_concat([begge_retninger1, begge_retninger2, ft, tf, n, n2])
+    else:
+        veglenker = gdf_concat([begge_retninger1, begge_retninger2, ft, tf])
+    
+    return veglenker
 
 
 def gridish(gdf, meter, x2 = False):
@@ -238,7 +256,7 @@ def finn_isolerte_nettverk(veger, lengde: int, ruteloop_m: int):
         sperringer = veger.loc[veger.sperring.astype(int) == 1]
     else:
         ikke_sperringer = veger
-        sperringer = veger
+        sperringer = None
     
     # samle nesten overlappende med buffer, dissolve og explode. Loopes for hver rute.
     def buffdissexp_gridish_loop(veger, sperringer, lengde, kolonne):
@@ -248,7 +266,8 @@ def finn_isolerte_nettverk(veger, lengde: int, ruteloop_m: int):
         for i in veger[kolonne].unique():
             
             vegene = veger.loc[veger[kolonne] == i, ["geometry"]]
-            sperringene = sperringer.loc[sperringer[kolonne] == i, ["geometry", "idx"]]
+            if sperringer is not None:
+                sperringene = sperringer.loc[sperringer[kolonne] == i, ["geometry", "idx"]]
             
             vegene["geometry"] = vegene.buffer(0.001, resolution = 1) # lavest mulig oppløsning for å få det fort
             dissolvet = vegene.dissolve()
@@ -264,8 +283,11 @@ def finn_isolerte_nettverk(veger, lengde: int, ruteloop_m: int):
             # legg til nye idx-er i tuple-en med kanskje isolerte nettverk
             for geom in lite_nettverk.geometry:
                 
-                nye_kanskje_isolerte = tuple(veger.loc[veger.within(geom), "idx"]) + tuple(sperringene.loc[sperringene.intersects(geom), "idx"])
+                nye_kanskje_isolerte = tuple(veger.loc[veger.within(geom), "idx"])
                 
+                if sperringer is not None:
+                    nye_kanskje_isolerte = nye_kanskje_isolerte + tuple(sperringene.loc[sperringene.intersects(geom), "idx"])
+                                
                 nye_kanskje_isolerte = tuple(x for x in nye_kanskje_isolerte if x not in kanskje_isolerte)
                 
                 kanskje_isolerte = kanskje_isolerte + nye_kanskje_isolerte
@@ -329,10 +351,11 @@ def tett_nettverkshull(noder, veger, avstand):
                             for dist, idx in zip(avstander, idxs)
                             if dist < avstand and dist > 0])
 
+
     # lag GeoDataFrame med rette linjer
     fra = gpd.GeoSeries.from_wkt(fra, crs=crs)
     til = gpd.GeoSeries.from_wkt(til, crs=crs)
-    nye_lenker = shapely.shortest_line(fra, til)
+    nye_lenker = shortest_line(fra, til)
     nye_lenker = gpd.GeoDataFrame({"geometry": nye_lenker}, geometry="geometry", crs=crs)
     
     # så lage resten av kolonnene
@@ -420,7 +443,7 @@ def lag_turn_restrictions(veger, turn_restrictions):
     # smelt lenkeparene sammen
     dobbellenker["minutter"] = dobbellenker["minutter1"] + dobbellenker["minutter2"]
     dobbellenker["meter"] = dobbellenker["meter1"] + dobbellenker["meter2"]
-    dobbellenker["geometry"] = shapely.line_merge(shapely.union(dobbellenker.geom1, dobbellenker.geom2))
+    dobbellenker["geometry"] = line_merge(union(dobbellenker.geom1, dobbellenker.geom2))
     dobbellenker = gpd.GeoDataFrame(dobbellenker, geometry = "geometry", crs = 25833)
     dobbellenker["turn_restriction"] = True
     
