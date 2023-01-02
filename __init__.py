@@ -1,5 +1,5 @@
 
-__version__ = "0.1.1"
+__version__ = "0.1.2"
 
 # sjekk om manglende dependencies (kopiert fra pandas' __init__)
 _hard_dependencies = ("numpy", "pandas", "geopandas", "igraph", "sklearn")
@@ -28,6 +28,6 @@ from networkz.hjelpefunksjoner import (
     fjern_tomme_geometrier, 
     gdf_concat,
     tilfeldige_punkter,
-    les_geoparquet,
+    les_geopandas,
     kutt_linjer
     )

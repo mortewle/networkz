@@ -13,33 +13,29 @@ def service_area(G,
                  id_kolonne = None, # hvis ikke id-kolonne oppgis, brukes startpunktenes geometri som id
                  ):
         
-    startpunkter = startpunkter.copy().to_crs(25833)
+    startpunkter = startpunkter.to_crs(25833)
 
-    id_kolonner = bestem_ids(id_kolonne, startpunkter)
-    if id_kolonne is None:
-        id_kolonne = "fra"
+    startpunkter, id_kolonner = bestem_ids(id_kolonne, startpunkter)
     
     startpunkter["nz_idx"] = lag_midlr_id(G.noder, startpunkter)
 
     G2, startpunkter = lag_graf(G, G.kostnad, startpunkter)
-
-    if isinstance(impedance, int) or isinstance(impedance, str):
-        impedance = [impedance]
-        
+    
+    if isinstance(impedance, (str, int, float)):
+        impedance = [float(impedance)]
+    
     # loop for hver kostnad og hvert startpunkt
     alle_service_areas = []   
     for i in startpunkter["nz_idx"]:
         for imp in impedance:
-
-            startpunkt = startpunkter[startpunkter["nz_idx"]==i]
             
             # beregn alle kostnader fra startpunktet
-            resultat = G2.distances(weights='weight', source = startpunkt["nz_idx"].iloc[0])
-
+            resultat = G2.distances(weights='weight', source = i)
+                        
             # lag tabell av resultatene og fjern alt over ønsket kostnad
             df = pd.DataFrame(data={"name": np.array(G2.vs["name"]), G.kostnad: resultat[0]})
             df = df[df[G.kostnad] < imp]
-
+                            
             if len(df) == 0:
                 alle_service_areas.append(gpd.GeoDataFrame(pd.DataFrame({id_kolonne: [i], G.kostnad: imp, "geometry": LineString()}), 
                                                            geometry="geometry", crs=25833))
@@ -55,7 +51,7 @@ def service_area(G,
             sa[id_kolonne] = i
             sa[G.kostnad] = imp
             alle_service_areas.append(sa)
-
+    
     alle_service_areas = gdf_concat(alle_service_areas)
 
     # få tilbake opprinnelige id-er
@@ -63,6 +59,6 @@ def service_area(G,
 
     alle_service_areas = alle_service_areas[[id_kolonne, G.kostnad, "geometry"]]
     
-    return alle_service_areas
+    return alle_service_areas.reset_index(drop=True)
 
 

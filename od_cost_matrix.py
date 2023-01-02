@@ -16,17 +16,12 @@ def od_cost_matrix(G,
                     destination_count: int = None,
                     ):
         
-    startpunkter = startpunkter.copy().to_crs(25833)
-    sluttpunkter = sluttpunkter.copy().to_crs(25833)
+    startpunkter = startpunkter.to_crs(25833)
+    sluttpunkter = sluttpunkter.to_crs(25833)
 
-    id_kolonner = bestem_ids(id_kolonne,
-                             startpunkter,
-                             sluttpunkter)
+    startpunkter, sluttpunkter, id_kolonner = bestem_ids(id_kolonne, startpunkter, sluttpunkter)
 
-    # må lage midlertidig id som går fra høyeste node_id+1
-    startpunkter["nz_idx"], sluttpunkter["nz_idx"] = lag_midlr_id(G.noder,
-                                                                  startpunkter,
-                                                                  sluttpunkter)
+    startpunkter["nz_idx"], sluttpunkter["nz_idx"] = lag_midlr_id(G.noder, startpunkter, sluttpunkter)
         
     # så loop nettverksberegningen for hver kostnad (hvis flere)
     kostnadene = G.kostnad
@@ -123,5 +118,5 @@ def od_cost_matrix(G,
     # få tilbake opprinnelige id-er
     out = map_ids(out, id_kolonner, startpunkter, sluttpunkter)
 
-    return out
+    return out.reset_index(drop=True)
 

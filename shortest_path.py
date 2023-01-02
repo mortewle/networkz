@@ -7,24 +7,24 @@ from networkz.lag_igraph import lag_graf
 
 
 def shortest_path(G,
-                    startpunkter: gpd.GeoDataFrame, 
-                    sluttpunkter: gpd.GeoDataFrame,
-                    id_kolonne = None,
-                    cutoff: int = None,
-                    destination_count: int = None,
-                    radvis = False,
-                    tell_opp = False,
-                    ):
+                  startpunkter: gpd.GeoDataFrame, 
+                  sluttpunkter: gpd.GeoDataFrame,
+                  id_kolonne = None,
+                  cutoff: int = None,
+                  destination_count: int = None,
+                  radvis = False,
+                  tell_opp = False,
+                  ):
 
     import warnings
     warnings.filterwarnings("ignore", category=RuntimeWarning) # ignorer tåpelig advarsel
             
-    startpunkter = startpunkter.copy().to_crs(25833)
-    sluttpunkter = sluttpunkter.copy().to_crs(25833)
+    startpunkter = startpunkter.to_crs(25833)
+    sluttpunkter = sluttpunkter.to_crs(25833)
     G.nettverk = G.nettverk.to_crs(25833)
     
-    id_kolonner = bestem_ids(id_kolonne, startpunkter, sluttpunkter)
-
+    startpunkter, sluttpunkter, id_kolonner = bestem_ids(id_kolonne, startpunkter, sluttpunkter)
+        
     startpunkter["nz_idx"], sluttpunkter["nz_idx"] = lag_midlr_id(G.noder, startpunkter, sluttpunkter)
     
     G2, startpunkter, sluttpunkter = lag_graf(G,
@@ -81,17 +81,20 @@ def shortest_path(G,
         veger["source_target"] = veger.source + "_" + veger.target
         
         return veger.merge(lenker, on="source_target", how="inner").drop("source_target", axis=1)
-        
-    linjer = gdf_concat(linjer)
     
+    try:
+        linjer = gdf_concat(linjer)
+    except Exception:
+        raise ValueError(f"Ingen ruter ble funnet. Mulig prøv {'directed=False, ' if G.directed==True else ''}{'fjern_isolerte=True, ' if G.fjern_isolerte==False else ''}{'høyere dist_faktor, ' if G.dist_faktor<15 else ''}")
+            
     linjer = (linjer
-          .replace([np.inf, -np.inf], np.nan)
-          .loc[(linjer[G.kostnad] > 0) | (linjer[G.kostnad].isna())]
-          .reset_index(drop=True)
-          .merge(startpunkter[["dist_node_start", "nz_idx"]], left_on="fra", right_on="nz_idx", how="left")
-          .drop("nz_idx", axis=1)
-          .merge(sluttpunkter[["dist_node_slutt", "nz_idx"]], left_on="til", right_on="nz_idx", how="left")
-          .drop("nz_idx", axis=1)
+              .replace([np.inf, -np.inf], np.nan)
+              .loc[(linjer[G.kostnad] > 0) | (linjer[G.kostnad].isna())]
+              .reset_index(drop=True)
+              .merge(startpunkter[["dist_node_start", "nz_idx"]], left_on="fra", right_on="nz_idx", how="left")
+              .drop("nz_idx", axis=1)
+              .merge(sluttpunkter[["dist_node_slutt", "nz_idx"]], left_on="til", right_on="nz_idx", how="left")
+              .drop("nz_idx", axis=1)
     )
 
     linjer = map_ids(linjer, id_kolonner, startpunkter, sluttpunkter)
@@ -104,5 +107,5 @@ def shortest_path(G,
         
     linjer = linjer[["fra", "til", G.kostnad, "geometry"]]
     
-    return linjer
+    return linjer.reset_index(drop=True)
 
