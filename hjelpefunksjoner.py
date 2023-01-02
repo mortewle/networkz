@@ -14,7 +14,7 @@ def les_geoparquet(sti, **qwargs):
         return gpd.read_parquet(sti, **qwargs)
   
   
-def read_geopandas(sti, **qwargs):
+def les_geopandas(sti, **qwargs):
     try:
         from dapla import FileClient
         fs = FileClient.get_gcs_file_system()
@@ -67,14 +67,15 @@ def gdf_concat(gdf_liste: list, crs=None, axis=0, ignore_index=True, geometry="g
     Samler liste med geodataframes til en lang geodataframe.
     Ignorerer index, endrer til samme crs. """
     
-    for i, gdf in enumerate(gdf_liste):
-        if len(gdf)==0:
-            raise ValueError(f"{i+1}. gdf-en har 0 rader.")
+    gdf_liste = [gdf for gdf in gdf_liste if len(gdf)]
+    
+    if not len(gdf_liste):
+        raise ValueError("gdf_concat: alle gdf-ene har 0 rader")
     
     if not crs:
         crs = gdf_liste[0].crs
         
-    """OBS. i gdf_concat. går midlertidig via 25832 fordi noe er galt med 25833..."""
+    """OBS: går midlertidig via 25832 fordi noe er galt med 25833..."""
     
     gdf_liste = [gdf.to_crs(25832) for gdf in gdf_liste]
     
