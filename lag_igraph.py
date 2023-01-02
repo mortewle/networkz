@@ -64,8 +64,7 @@ def avstand_til_noder(punkter, G, hva):
     punkter_array = np.array([(x, y) for x, y in zip(punkter.geometry.x, punkter.geometry.y)])
     noder_array = np.array([(x, y) for x, y in zip(noder.geometry.x, noder.geometry.y)])
     
-    # avstand fra punktene til 50 nærmeste noder
-    # de langt unna vil ikke være attraktive pga lav hastighet fram til nodene 
+    # avstand fra punktene til 50 nærmeste noder (gjerne vil bare de nærmeste være attraktive pga lav hastighet fram til nodene) 
     nbr = NearestNeighbors(n_neighbors=50, algorithm='ball_tree').fit(noder_array)
     avstander, idxs = nbr.kneighbors(punkter_array)
     
