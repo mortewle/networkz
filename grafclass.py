@@ -7,7 +7,7 @@ from networkz.od_cost_matrix import od_cost_matrix
 from networkz.shortest_path import shortest_path
 from networkz.service_area import service_area
 from networkz.nettverk import lag_node_ids
-from networkz.hjelpefunksjoner import read_geopandas
+from networkz.hjelpefunksjoner import les_geopandas
 
 
 # årene det ligger tilrettelagte vegnettverk på Dapla.
@@ -203,18 +203,18 @@ class Graf:
         
         if self._kommuner:
             try:
-                nettverk = read_geopandas(self.nettverkssti, 
+                nettverk = les_geopandas(self.nettverkssti, 
                                       filters=[("KOMMUNENR", "in", self._kommuner)])
             except Exception:
-                kommuner = read_geopandas(KOMMUNESTI[0], layer=KOMMUNESTI[1]).rename(columns={"kommunenummer": "KOMMUNENR"})
+                kommuner = les_geopandas(KOMMUNESTI[0], layer=KOMMUNESTI[1]).rename(columns={"kommunenummer": "KOMMUNENR"})
                 kommnr = [self._kommuner] if isinstance(self._kommuner, str) else self._kommuner
                 kommuner = kommuner.loc[kommuner.KOMMUNENR.isin(kommnr), ["KOMMUNENR", "geometry"]]
                 
-                nettverk = read_geopandas(self.nettverkssti)
+                nettverk = les_geopandas(self.nettverkssti)
                 nettverk = nettverk.sjoin(kommuner, how="inner").drop("index_right", axis=1, errors="ignore")
                 
         else:
-            nettverk = read_geopandas(self.nettverkssti)        
+            nettverk = les_geopandas(self.nettverkssti)        
         
         return nettverk.to_crs(25833)
      
@@ -270,7 +270,7 @@ class Graf:
             
     
     def sjekk_kostnad(self, kostnad):
-        """ sjekk om kostnadskolonnen finnes i dataene """
+        """ sjekk om kostnadskolonnen finnes i dataene. """
         
         if isinstance(kostnad, str):
             kostnad = [kostnad]
@@ -337,8 +337,8 @@ class Graf:
     def fjern_isolerte(self, ny_verdi):
         if ny_verdi and not "isolert" in self.nettverk.columns:
             raise ValueError("Kan ikke sette fjern_isolerte til True når kolonnen 'isolert' ikke finnes.")
-        return self._fjern_isolerte    
-
+        self._fjern_isolerte = ny_verdi
+        return self._fjern_isolerte
     
     # disse skal det ikke være lov å endre
     @property
