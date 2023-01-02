@@ -21,53 +21,59 @@ def lag_midlr_id(noder, startpunkter, sluttpunkter=None):
     return startpunkter["nz_idx"], sluttpunkter["nz_idx"]
 
 
-def map_ids(df, id_kolonner, startpunkter, sluttpunkter=None):
-
-    # hvis id_kolonne er oppgitt, map/koble tilbake denne id-en    
-    if not "geom_wkt" in id_kolonner:
-        id_dict_start = {nz_idx: idd  for idd, nz_idx in zip(startpunkter[id_kolonner[0]], startpunkter["nz_idx"])}
-        if sluttpunkter is None:
-            df[id_kolonner[0]] = df[id_kolonner[0]].map(id_dict_start)
-        else:
-            df["fra"] = df["fra"].map(id_dict_start)
-            id_dict_slutt = {nz_idx: idd  for idd, nz_idx in zip(sluttpunkter[id_kolonner[1]], sluttpunkter["nz_idx"])}
-            df["til"] = df["til"].map(id_dict_slutt)
+def map_ids(df, id_kolonner, startpunkter, sluttpunkter=None):    
+    """ Fra midlertidig til opprinnelig id. """
     
-    # hvis ingen id_kolonne er oppgitt, brukes geometrien i wkt-format
-    else:
+    if "wkt" in id_kolonner:
         id_dict_start = {nz_idx: idd.wkt  for idd, nz_idx in zip(startpunkter.geometry, startpunkter["nz_idx"])}
         df["fra"] = df["fra"].map(id_dict_start)
         if sluttpunkter is not None:
             id_dict_slutt = {nz_idx: idd.wkt  for idd, nz_idx in zip(sluttpunkter.geometry, sluttpunkter["nz_idx"])}
             df["til"] = df["til"].map(id_dict_slutt)
-            
-    return df.reset_index(drop=True)
-
-
-# funksjon som sjekker om id-kolonnene finnes, eller om geometri (wkt) skal brukes
-# returnerer tuple med kolonnenavn for start- og sluttpunktene
-def bestem_ids(id_kolonne, startpunkter, sluttpunkter=None) -> tuple:
-    if id_kolonne is None:
-        return ("geom_wkt", "geom_wkt")
+        return df
+        
+    if sluttpunkter is None:
+        id_dict_start = {nz_idx: idd  for idd, nz_idx in zip(startpunkter[id_kolonner], startpunkter["nz_idx"])}
+        df[id_kolonner] = df[id_kolonner].map(id_dict_start)
+        return df
     
-    elif isinstance(id_kolonne, str):
-        if id_kolonne=="geometry":
-            return ("geom_wkt", "geom_wkt")
-        if sluttpunkter is not None:
-            if id_kolonne in startpunkter.columns and id_kolonne in sluttpunkter.columns:
-                return (id_kolonne, id_kolonne)
-            else:
-                raise ValueError("id_kolonne finnes ikke i start- og/eller sluttpunkt-dataene")
-        if id_kolonne in startpunkter.columns:
-            return (id_kolonne, id_kolonne)
-        else:
-            raise ValueError("id_kolonne finnes ikke i startpunkt-dataene")
+    if isinstance(id_kolonner, str):
+        id_kolonner = (id_kolonner, id_kolonner)
+
+    id_dict_start = {nz_idx: idd  for idd, nz_idx in zip(startpunkter[id_kolonner[0]], startpunkter["nz_idx"])}
+    df["fra"] = df["fra"].map(id_dict_start)
     
-    elif isinstance(id_kolonne, list) or isinstance(id_kolonne, tuple) and len(id_kolonne)==2:
-        if id_kolonne[0] in startpunkter.columns and id_kolonne[1] in sluttpunkter.columns:
-            return (id_kolonne[0], id_kolonne[1])
-        else:
+    id_dict_slutt = {nz_idx: idd  for idd, nz_idx in zip(sluttpunkter[id_kolonner[1]], sluttpunkter["nz_idx"])}
+    df["til"] = df["til"].map(id_dict_slutt)
+        
+    return df
+ 
+
+def bestem_ids(id_kolonne, startpunkter, sluttpunkter=None):
+    """
+    Sjekker om id-kolonnene fins.
+    Returnerer start- og sluttpunktene med kun geometri og id-kolonne.
+    Returnerer også navnet på id-kolonnen(e) for å kunne mappe senere. 
+    """
+    
+    if not id_kolonne or id_kolonne=="geometry":
+        id_kolonne = "wkt"
+        
+    if sluttpunkter is None:
+        assert isinstance(id_kolonne, str), "Kan bare ha én id-kolonne som string i service_area."
+        if id_kolonne=="wkt":
+            return startpunkter[["geometry"]], id_kolonne
+        return startpunkter[[id_kolonne, "geometry"]], id_kolonne
+    
+    if isinstance(id_kolonne, str):
+        if id_kolonne=="wkt":
+            return startpunkter[["geometry"]], sluttpunkter[["geometry"]], id_kolonne
+        return startpunkter[[id_kolonne, "geometry"]], sluttpunkter[[id_kolonne, "geometry"]], id_kolonne
+    
+    elif isinstance(id_kolonne, (list, tuple)) and len(id_kolonne)==2:
+        if not id_kolonne[0] in startpunkter and id_kolonne[1] in sluttpunkter:
             raise ValueError("id_kolonne finnes ikke i start- eller sluttpunkt-dataene")
-    
+        return startpunkter[[id_kolonne[0], "geometry"]], sluttpunkter[[id_kolonne[0], "geometry"]], id_kolonne
+        
     else:
-        raise ValueError("id_kolonne er verken None, string, liste eller tuple.")
+        raise ValueError("id_kolonne må være string, liste, tuple eller None/False/0.")
